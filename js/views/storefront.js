@@ -1005,10 +1005,47 @@ function footer(data) {
 
 export function mountStorefront(view, { track = false, params = [] } = {}) {
   const host = h('div.app');
+  const bootPanel = h('div.gate', null,
+    h('div.gate__card', null,
+      h('div.gate__logo', null, h('span.spinner')),
+      h('p.t-body', null, 'Memuat katalog…')
+    )
+  );
+  host.append(bootPanel);
+  view.append(host);
+
+  const showCatalogError = (message) => {
+    bootPanel.innerHTML = '';
+    bootPanel.append(
+      h('div.gate__card', null,
+        h('div.gate__logo', null, icon('alert')),
+        h('h1.t-h1', null, 'Katalog tidak dimuat'),
+        h('p.t-body.mt-2', null, message),
+        h('p.t-sm.mt-3', null, 'Periksa GAS_URL (Web App /exec) di js/config.js dan SPREADSHEET_ID di Apps Script. Kosongkan GAS_URL untuk mode demo lokal.'),
+        h('div.row.gap-2.mt-5', null,
+          h('button.btn.btn--ghost', { onclick: () => location.reload() }, icon('refresh'), 'Coba lagi'),
+          h('a.btn.btn--primary', { href: withBase('/') }, icon('store'), 'Toko')
+        )
+      )
+    );
+  };
 
   const boot = async () => {
-    const data = await api.getPublicCatalogData();
+    let data;
+    try {
+      data = await api.getPublicCatalogData();
+    } catch (err) {
+      showCatalogError(err.message || 'Gagal menghubungi server.');
+      return;
+    }
+
+    if (!data || data.ok === false || !data.store || !Array.isArray(data.products)) {
+      showCatalogError(data?.error || 'Respons server tidak valid atau database belum di-setup (jalankan setupDatabase dari portal).');
+      return;
+    }
+
     state.data = data;
+    bootPanel.remove();
 
     const search = h('input.input.input--icon', {
       type: 'search',
@@ -1053,6 +1090,5 @@ export function mountStorefront(view, { track = false, params = [] } = {}) {
     if (code && !track) openTrack(code);
   };
 
-  view.append(host);
   boot();
 }

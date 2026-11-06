@@ -38,77 +38,119 @@ export function mountPortal(view, params = []) {
     return;
   }
 
+  // Pulihkan sesi dari tab sebelumnya agar tidak diminta login berulang.
   if (!session) {
-    view.append(pinGate());
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(ROLE_KEY) || 'null');
+      if (saved && saved.role) session = saved;
+    } catch { /* ignore */ }
+  }
+
+  if (!session) {
+    view.append(loginGate());
     return;
   }
 
   view.append(portalShell(sub));
 }
 
-function pinGate() {
+/* -------------------------------------------------------------------------
+   Login: PIN 6 digit -> pilih peran -> username + kata sandi
+   ---------------------------------------------------------------------- */
+
+const PIN_LENGTH = 6;
+
+/** Daftar akun bawaan; bisa diubah owner lewat menu Pengguna. */
+const DEFAULT_ACCOUNTS = [
+  { username: 'owner', password: 'owner123', name: 'Owner', role: 'owner' },
+  { username: 'kasir', password: 'kasir123', name: 'Kasir', role: 'kasir' },
+];
+
+function loginGate() {
+  let step = 'pin';        // 'pin' | 'role' | 'form'
   let pin = '';
+  let role = 'owner';
+
   const host = h('div.gate');
-  const dots = h('div.pin-display');
-  const error = h('div.gate__error');
+  const card = h('div.gate__card');
 
-  const renderDots = () => {
-    dots.innerHTML = '';
-    for (let i = 0; i < 4; i++) {
-      dots.append(h('div', { class: `pin-dot ${i < pin.length ? 'is-filled' : ''}` }));
-    }
+  const paint = () => {
+    card.innerHTML = '';
+    if (step === 'pin') return card.append(pinStep());
+    if (step === 'role') return card.append(roleStep());
+    return card.append(formStep());
   };
 
-  const press = async (d) => {
-    if (pin.length >= 4) return;
-    pin += d;
-    renderDots();
-    error.textContent = '';
+  /* --- langkah 1: PIN 6 digit ------------------------------------------- */
+  const pinStep = () => {
+    const dots = h('div.pin-display');
+    const error = h('div.gate__error');
 
-    if (pin.length === 4) {
-      const res = await api.verifyPortalPin(pin);
-      if (res.ok) {
-        session = { role: 'owner', name: 'Owner' };
-        try { sessionStorage.setItem(ROLE_KEY, JSON.stringify(session)); } catch { /* ignore */ }
-        const host = document.getElementById('app');
-        host.innerHTML = '';
-        host.append(portalShell(''));
-        toast('Selamat datang kembali', 'ok');
-      } else {
-        error.textContent = res.error || 'PIN salah';
-        pin = '';
-        renderDots();
-        setTimeout(() => { error.textContent = ''; }, 2200);
+    const renderDots = () => {
+      dots.innerHTML = '';
+      for (let i = 0; i < PIN_LENGTH; i++) {
+        dots.append(h('div', { class: `pin-dot ${i < pin.length ? 'is-filled' : ''}` }));
       }
-    }
-  };
+    };
 
-  const back = () => {
-    if (pin.length) {
-      pin = pin.slice(0, -1);
+    const press = (d) => {
+      if (pin.length >= PIN_LENGTH) return;
+      pin += d;
       renderDots();
       error.textContent = '';
-    } else {
-      go('/');
+
+      if (pin.length === PIN_LENGTH) {
+        api.verifyPortalPin(pin).then((res) => {
+          if (res && res.ok) {
+            step = 'role';
+            paint();
+            return;
+          }
+          error.textContent = (res && res.error) || 'PIN salah';
+          pin = '';
+          renderDots();
+          setTimeout(() => { error.textContent = ''; }, 2400);
+        });
+      }
+    };
+
+    const back = () => {
+      if (pin.length) {
+        pin = pin.slice(0, -1);
+        renderDots();
+        error.textContent = '';
+      } else {
+        go('/');
+      }
+    };
+
+    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    const keypad = h('div.keypad');
+    for (const k of keys) {
+      keypad.append(h('button.keypad__key', { onclick: () => press(k) }, k));
     }
-  };
+    keypad.append(
+      h('button.keypad__key.keypad__key--fn', { onclick: back, 'aria-label': 'Hapus' }, icon('chevronLeft')),
+      h('button.keypad__key', { onclick: () => press('0') }, '0'),
+      h('button.keypad__key.keypad__key--fn', {
+        onclick: () => { pin = ''; renderDots(); error.textContent = ''; },
+        'aria-label': 'Hapus semua',
+      }, icon('refresh'))
+    );
 
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
-  const keypad = h('div.keypad');
-  for (const k of keys) {
-    keypad.append(h('button.keypad__key', { onclick: () => press(k) }, k));
-  }
-  keypad.append(
-    h('button.keypad__key.keypad__key--fn', { onclick: back, 'aria-label': 'Hapus' }, icon('chevronLeft')),
-    h('button.keypad__key', { onclick: () => press('0') }, '0'),
-    h('button.keypad__key.keypad__key--fn', { onclick: () => { pin = ''; renderDots(); error.textContent = ''; }, 'aria-label': 'Hapus semua' }, icon('refresh'))
-  );
+    renderDots();
 
-  host.append(
-    h('div.gate__card', null,
+    const onKey = (e) => {
+      if (step !== 'pin') { document.removeEventListener('keydown', onKey); return; }
+      if (/^[0-9]$/.test(e.key)) press(e.key);
+      else if (e.key === 'Backspace') back();
+    };
+    document.addEventListener('keydown', onKey);
+
+    return h('div', null,
       h('div.gate__logo', null, icon('lock')),
       h('h1.t-h1', null, 'Portal Internal'),
-      h('p.t-body.mt-2', null, 'Masukkan PIN untuk masuk sebagai kasir, owner, atau membuka layar antrean.'),
+      h('p.t-body.mt-2', null, `Masukkan PIN ${PIN_LENGTH} digit untuk membuka portal.`),
       dots,
       error,
       keypad,
@@ -118,18 +160,114 @@ function pinGate() {
           onclick: () => { pin = ''; renderDots(); error.textContent = ''; },
         }, icon('refresh'), 'Bersihkan')
       )
-    )
-  );
-
-  // keyboard support
-  const onKey = (e) => {
-    if (/^[0-9]$/.test(e.key)) press(e.key);
-    else if (e.key === 'Backspace') back();
-    else if (e.key === 'Enter' && pin.length === 4) press('');
+    );
   };
-  document.addEventListener('keydown', onKey);
-  setTimeout(() => document.removeEventListener('keydown', onKey), 600000);
 
+  /* --- langkah 2: pilih peran ------------------------------------------ */
+  const roleStep = () => {
+    const roleCard = (value, title, desc, iconName) =>
+      h('button.pay__opt', {
+        type: 'button',
+        style: { width: '100%', textAlign: 'left' },
+        onclick: () => { role = value; step = 'form'; paint(); },
+      },
+        h('div.pay__ico', null, icon(iconName)),
+        h('div.grow', null,
+          h('b', null, title),
+          h('span', null, desc)
+        )
+      );
+
+    return h('div', null,
+      h('div.gate__logo', null, icon('users')),
+      h('h1.t-h1', null, 'Masuk sebagai'),
+      h('p.t-body.mt-2', null, 'Pilih peran untuk membuka menu yang sesuai.'),
+      h('div.pay.mt-5', null,
+        roleCard('owner', 'Owner', 'Akses penuh: katalog, laporan, pengguna, pengaturan', 'user'),
+        roleCard('kasir', 'Kasir', 'Kelola transaksi, pesanan, dan antrean saja', 'cash')
+      ),
+      h('button.btn.btn--ghost.btn--sm.grow.mt-4', {
+        onclick: () => { step = 'pin'; pin = ''; paint(); },
+      }, icon('arrowLeft'), 'Kembali ke PIN')
+    );
+  };
+
+  /* --- langkah 3: username + kata sandi --------------------------------- */
+  const formStep = () => {
+    const error = h('div.gate__error');
+    const userInput = h('input.input', {
+      type: 'text',
+      placeholder: 'Username',
+      autocapitalize: 'none',
+      autocorrect: 'off',
+      spellcheck: false,
+      'aria-label': 'Username',
+    });
+    const passInput = h('input.input', {
+      type: 'password',
+      placeholder: 'Kata sandi',
+      'aria-label': 'Kata sandi',
+    });
+
+    const submit = async () => {
+      const username = userInput.value.trim();
+      const password = passInput.value;
+      if (!username || !password) {
+        error.textContent = 'Username dan kata sandi wajib diisi';
+        return;
+      }
+      error.textContent = '';
+      const res = await api.login(username, password);
+      if (!res || !res.ok) {
+        error.textContent = (res && res.error) || 'Gagal masuk';
+        return;
+      }
+      const user = res.user || {};
+      if (user.role !== role) {
+        error.textContent = `Akun ini bukan akun ${role === 'owner' ? 'owner' : 'kasir'}.`;
+        return;
+      }
+      session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id };
+      try { sessionStorage.setItem(ROLE_KEY, JSON.stringify(session)); } catch { /* ignore */ }
+      const app = document.getElementById('app');
+      app.innerHTML = '';
+      app.append(portalShell(''));
+      toast(`Selamat datang, ${session.name}`, 'ok');
+    };
+
+    userInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') passInput.focus(); });
+    passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+    const hint = role === 'owner'
+      ? 'Akun bawaan: owner / owner123'
+      : 'Akun bawaan: kasir / kasir123';
+
+    setTimeout(() => userInput.focus(), 30);
+
+    return h('div', null,
+      h('div.gate__logo', null, icon(role === 'owner' ? 'user' : 'cash')),
+      h('h1.t-h1', null, role === 'owner' ? 'Login Owner' : 'Login Kasir'),
+      h('p.t-body.mt-2', null, 'Masukkan username dan kata sandi akun Anda.'),
+      h('div.mt-5', null,
+        h('div.field', null, h('label', null, 'Username'), userInput),
+        h('div.field.mt-3', null, h('label', null, 'Kata sandi'), passInput)
+      ),
+      error,
+      h('button.btn.btn--primary.btn--lg.grow.mt-4', { onclick: submit }, icon('login'), 'Masuk'),
+      h('p.t-xs.mt-3', { style: { opacity: '0.75' } }, hint),
+      h('div.row.gap-2.mt-4', null,
+        h('button.btn.btn--ghost.btn--sm.grow', {
+          onclick: () => { step = 'role'; paint(); },
+        }, icon('arrowLeft'), 'Ganti peran'),
+        h('button.btn.btn--ghost.btn--sm.grow', {
+          onclick: () => { step = 'pin'; pin = ''; paint(); },
+        }, icon('refresh'), 'Ulangi PIN')
+      )
+    );
+  };
+
+  paint();
+  host.append(card);
   return host;
 }
 
@@ -138,23 +276,34 @@ function pinGate() {
    ---------------------------------------------------------------------- */
 
 const NAV = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'chart', roles: ['owner', 'kasir'] },
   { key: 'pos', label: 'Kasir / POS', icon: 'cash', roles: ['owner', 'kasir'] },
-  { key: 'orders', label: 'Pesanan Online', icon: 'receipt', roles: ['owner', 'kasir'] },
-  { key: 'queue', label: 'Antrean', icon: 'list', roles: ['owner', 'kasir'] },
-  { key: 'products', label: 'Katalog & Stok', icon: 'box', roles: ['owner'] },
-  { key: 'reports', label: 'Laporan', icon: 'chart', roles: ['owner', 'kasir'] },
   { key: 'transactions', label: 'Transaksi', icon: 'receipt', roles: ['owner', 'kasir'] },
+  { key: 'orders', label: 'Pesanan Online', icon: 'fileText', roles: ['owner', 'kasir'] },
+  { key: 'queue', label: 'Antrean', icon: 'list', roles: ['owner', 'kasir'] },
+  { key: 'dashboard', label: 'Dashboard', icon: 'chart', roles: ['owner'] },
+  { key: 'reports', label: 'Laporan', icon: 'wallet', roles: ['owner'] },
+  { key: 'products', label: 'Katalog & Stok', icon: 'box', roles: ['owner'] },
   { key: 'users', label: 'Pengguna', icon: 'users', roles: ['owner'] },
   { key: 'settings', label: 'Pengaturan', icon: 'settings', roles: ['owner'] },
 ];
+
+/** Menu default untuk tiap peran (kasir langsung ke POS). */
+const DEFAULT_VIEW = { owner: 'dashboard', kasir: 'pos' };
 
 function portalShell(active = '') {
   const shell = h('div.portal');
   const nav = h('aside.rail-nav');
   const main = h('main.portal__main');
 
-  let current = active || 'dashboard';
+  // Cache view per sesi: pindah menu tidak memuat ulang data dari server.
+  const viewCache = new Map();
+
+  // Menu yang boleh dibuka depends peran; kasir hanya melihat menu operasional.
+  const allowed = NAV.filter((n) => n.roles.includes(session.role)).map((n) => n.key);
+  let current = allowed.includes(active)
+    ? active
+    : (DEFAULT_VIEW[session.role] || allowed[0] || 'pos');
+
   const body = h('div.portal__body');
   const titleEl = h('h1.t-h2');
   const subEl = h('div.t-sm');
@@ -217,19 +366,48 @@ function portalShell(active = '') {
   const renderView = () => {
     const item = NAV.find((n) => n.key === current);
     titleEl.textContent = item?.label || 'Portal';
+
+    // Kasir tidak boleh membuka menu owner walau URL/riwayat menyodorkannya.
+    if (!allowed.includes(current)) {
+      current = DEFAULT_VIEW[session.role] || allowed[0] || 'pos';
+      titleEl.textContent = NAV.find((n) => n.key === current)?.label || 'Portal';
+    }
+
+    // View yang sudah pernah dibuat disimpan di DOM lalu hanya
+    // disembunyikan/ditampilkan. Perpindahan menu jadi instan dan state di
+    // dalamnya (pencarian POS, filter, dsb.) tetap utuh.
+    const cached = viewCache.get(current);
+    if (cached) {
+      showView(cached);
+      return;
+    }
+
     body.innerHTML = '';
     body.append(h('div.row.gap-2.mb-4', null, h('span.spinner'), h('span.t-sm', null, 'Memuat…')));
 
     Promise.resolve(viewFactory[current]?.())
       .then((node) => {
-        body.innerHTML = '';
-        body.append(node);
+        if (!node) throw new Error('Menu tidak tersedia');
+        viewCache.set(current, node);
+        showView(node);
       })
       .catch((err) => {
         console.error(err);
         body.innerHTML = '';
         body.append(emptyState('alert', 'Gagal memuat', err.message || 'Terjadi kesalahan.'));
       });
+  };
+
+  /** Tampilkan satu view dan sembunyikan view lain yang sudah terpasang. */
+  const showView = (node) => {
+    body.querySelectorAll('.portal__pane').forEach((el) => {
+      el.hidden = el !== node;
+    });
+    if (!node.classList.contains('portal__pane')) {
+      node.classList.add('portal__pane');
+    }
+    if (!node.parentElement) body.append(node);
+    node.hidden = false;
   };
 
   main.append(
@@ -1485,14 +1663,18 @@ async function usersView() {
         h('div.modal__head', null,
           h('div.grow', null,
             h('h3.t-h2', null, isNew ? 'Tambah pengguna' : 'Ubah pengguna'),
-            h('p.t-body', { style: { marginTop: '4px' } }, isNew ? 'Kasir baru bisa langsung masuk dengan PIN portal' : draft.name)
+            h('p.t-body', { style: { marginTop: '4px' } }, isNew ? 'Kasir baru masuk memakai username & kata sandi yang Anda tentukan' : draft.name)
           ),
           h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
         ),
         h('div.modal__body', null,
           h('div.field', null, h('label', null, 'Nama lengkap'), nameInput),
           h('div.field.mt-3', null, h('label', null, 'Username'), userInput),
-          h('div.field.mt-3', null, h('label', null, 'Kata sandi'), passInput),
+          h('div.field.mt-3', null,
+            h('label', null, 'Kata sandi'),
+            passInput,
+            h('div.field__hint', null, 'Owner dapat mengubah kata sandi pengguna ini kapan saja lewat tombol "Ubah".')
+          ),
           h('div.field.mt-3', null, h('label', null, 'Peran'), roleSelect),
           h('label.switch.mt-4', null, activeSwitch, h('span.t-sm', null, 'Akun aktif'))
         ),
@@ -1539,7 +1721,7 @@ async function usersView() {
 
 async function settingsView() {
   const s = await api.getSettings();
-  const tab = 'umum';
+  let tab = 'umum';
   const host = h('div');
 
   const switchRow = (key, label, hint) => {
@@ -1577,6 +1759,13 @@ async function settingsView() {
 
     if (tab === 'umum') {
       host.append(
+        h('div.callout.mb-4', null,
+          icon('info'),
+          api.mode === 'gas'
+            ? 'Mode server aktif — data dibaca & ditulis ke Google Spreadsheet.'
+            : 'Mode demo lokal — data hanya tersimpan di perangkat ini. Isi GAS_URL di js/config.js untuk memakai Spreadsheet.'
+        ),
+
         h('div.split-2', null,
           h('div.panel', null,
             h('div.panel__head', null, h('h3.t-h3', null, 'Identitas toko')),
@@ -1596,7 +1785,7 @@ async function settingsView() {
               h('div.mt-3', null, textRow('deliveryRadiusKm', 'Radius delivery (km)', 'Batas jarak pengiriman', 'number')),
               h('div.mt-3', null, textRow('qrisMerchant', 'Nama merchants QRIS', 'Ditampilkan di struk')),
               h('div.mt-3', null, textRow('qrisNmid', 'NMID QRIS', 'Nomor merchants dinamis')),
-              h('div.mt-3', null, textRow('portalPin', 'PIN portal', 'PIN untuk masuk ke portal internal', 'text'))
+              h('div.mt-3', null, textRow('portalPin', 'PIN portal', 'PIN 6 digit untuk membuka portal internal', 'text'))
             )
           )
         ),
@@ -1668,13 +1857,26 @@ async function settingsView() {
           h('div.panel__head', null, h('h3.t-h3', null, 'Database & data')),
           h('div.panel__body', null,
             h('p.t-body.mb-4', null,
-              'Seluruh data tersimpan di perangkat ini (localStorage) dengan struktur yang sama persis seperti sheet Google: Products, Categories, Transactions, OnlineOrders, Users, Queue, dan Settings.'
+              api.mode === 'gas'
+                ? 'Data tersimpan di Google Spreadsheet melalui backend Apps Script. Tab: Settings, Categories, Products, Users, Transactions, OnlineOrders, Queue, dan Counter.'
+                : 'Seluruh data tersimpan di perangkat ini (localStorage) dengan struktur yang sama persis seperti sheet Google: Products, Categories, Transactions, OnlineOrders, Users, Queue, dan Settings.'
+            ),
+
+            h('div.callout.mb-4', null,
+              icon('info'),
+              api.mode === 'gas'
+                ? 'Mode server aktif. SPREADSHEET_ID diisi di Apps Script → Script properties. Mengganti ID di sana akan mengganti seluruh database yang dipakai.'
+                : 'Mode demo aktif. Isi GAS_URL di js/config.js untuk beralih ke Google Spreadsheet.'
             ),
 
             h('div.col.gap-3', null,
               h('button.btn.btn--primary', {
                 onclick: async () => {
                   const res = await api.setupDatabase();
+                  if (!res || res.ok === false) {
+                    toast(res?.error || 'setupDatabase() gagal', 'err');
+                    return;
+                  }
                   const m = modal((close) =>
                     h('div', null,
                       h('div.modal__head', null,
@@ -1710,21 +1912,29 @@ async function settingsView() {
 
               h('button.btn.btn--soft', {
                 onclick: async () => {
-                  const json = await api.exportDatabase();
-                  const ok = await copyText(json);
-                  toast(ok ? 'Data disalin ke clipboard' : 'Gagal menyalin', ok ? 'ok' : 'err');
+                  try {
+                    const json = await api.exportDatabase();
+                    const ok = await copyText(json);
+                    toast(ok ? 'Data disalin ke clipboard' : 'Gagal menyalin', ok ? 'ok' : 'err');
+                  } catch (err) {
+                    toast(err.message || 'Gagal mengekspor data', 'err');
+                  }
                 },
               }, icon('copy'), 'Salin data (JSON)'),
 
               h('button.btn.btn--soft', {
                 onclick: async () => {
-                  const blob = new Blob([await api.exportDatabase()], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `mykasir-backup-${new Date().toISOString().slice(0, 10)}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  try {
+                    const blob = new Blob([await api.exportDatabase()], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `mykasir-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  } catch (err) {
+                    toast(err.message || 'Gagal mengunduh cadangan', 'err');
+                  }
                 },
               }, icon('download'), 'Unduh cadangan'),
 
@@ -1755,11 +1965,17 @@ async function settingsView() {
                 onclick: async () => {
                   const ok = await confirmDialog({
                     title: 'Reset ke data contoh?',
-                    body: 'Semua transaksi, produk, dan pengaturan Anda akan diganti dengan data awal.',
+                    body: api.mode === 'gas'
+                      ? 'Semua transaksi, produk, dan pengaturan di SPREADSHEET akan diganti dengan data awal. Tindakan ini tidak bisa dibatalkan.'
+                      : 'Semua transaksi, produk, dan pengaturan Anda akan diganti dengan data awal.',
                     confirmLabel: 'Reset sekarang',
                   });
                   if (!ok) return;
-                  await api.resetDemoData();
+                  const res = await api.resetDemoData();
+                  if (!res || res.ok === false) {
+                    toast(res?.error || 'Reset gagal', 'err');
+                    return;
+                  }
                   toast('Data direset', 'ok');
                   setTimeout(() => location.reload(), 700);
                 },
@@ -1808,22 +2024,32 @@ function mountMap() {
   const lat = Number(s.storeLat) || -6.9147;
   const lng = Number(s.storeLng) || 107.6098;
 
-  // Load Leaflet from the vendored copy (offline-capable).
-  const css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = './vendor/leaflet.css';
-  document.head.append(css);
+  const fail = (msg) => {
+    holder.innerHTML = '';
+    holder.append(h('div.callout.callout--warn', null, icon('alert'), msg));
+  };
 
-  const script = document.createElement('script');
-  script.src = './vendor/leaflet.js';
-  script.onload = () => {
+  // Peta memerlukan Koordinat yang valid — cek dulu sebelum memuat Leaflet.
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    fail('Koordinat toko belum valid. Isi latitude & longitude secara manual.');
+    return;
+  }
+
+  const draw = () => {
     const L = window.L;
     if (!L) {
-      holder.append(h('div.callout.callout--warn', null, icon('alert'), 'Peta tidak dapat dimuat.'));
+      fail('Peta tidak dapat dimuat — pustaka Leaflet gagal dimuat.');
       return;
     }
 
-    const map = L.map(holder, { zoomControl: true }).setView([lat, lng], 14);
+    holder.innerHTML = '';
+    let map;
+    try {
+      map = L.map(holder, { zoomControl: true }).setView([lat, lng], 14);
+    } catch (err) {
+      fail('Peta tidak dapat ditampilkan: ' + (err?.message || 'Kesalahan tidak diketahui'));
+      return;
+    }
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
@@ -1832,21 +2058,48 @@ function mountMap() {
 
     const marker = L.marker([lat, lng], { draggable: true }).addTo(map);
 
-    marker.on('dragend', () => {
-      const pos = marker.getLatLng();
-      api.saveSettings({ storeLat: pos.lat, storeLng: pos.lng }).then(refreshSettings);
-      toast('Lokasi toko diperbarui', 'ok', 1800);
-    });
+    const persist = (pos) => {
+      api.saveSettings({ storeLat: pos.lat, storeLng: pos.lng })
+        .then((res) => {
+          if (res && res.ok === false) {
+            toast(res.error || 'Gagal menyimpan lokasi', 'err');
+            return;
+          }
+          refreshSettings();
+          toast('Lokasi toko diperbarui', 'ok', 1800);
+        })
+        .catch((err) => toast(err.message || 'Gagal menyimpan lokasi', 'err'));
+    };
 
+    marker.on('dragend', () => persist(marker.getLatLng()));
     map.on('click', (e) => {
       marker.setLatLng(e.latlng);
-      api.saveSettings({ storeLat: e.latlng.lat, storeLng: e.latlng.lng }).then(refreshSettings);
-      toast('Lokasi toko diperbarui', 'ok', 1800);
+      persist(e.latlng);
     });
+
+    setTimeout(() => map.invalidateSize(), 120);
   };
-  script.onerror = () => {
-    holder.append(h('div.callout.callout--warn', null, icon('alert'), 'Gagal memuat pustaka peta.'));
-  };
+
+  // Leaflet sudah dimuat sebelumnya (pindah tab lagi) -> langsung gambar.
+  if (window.L) {
+    draw();
+    return;
+  }
+
+  // Muat Leaflet dari salinan lokal (bisa dipakai offline).
+  if (!document.querySelector('link[data-leaflet-css]')) {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = withBase('vendor/leaflet.css');
+    css.dataset.leafletCss = '1';
+    document.head.append(css);
+  }
+
+  const script = document.createElement('script');
+  script.src = withBase('vendor/leaflet.js');
+  script.dataset.leafletJs = '1';
+  script.onload = draw;
+  script.onerror = () => fail('Gagal memuat pustaka peta (vendor/leaflet.js).');
   document.head.append(script);
 }
 

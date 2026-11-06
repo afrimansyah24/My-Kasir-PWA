@@ -17,6 +17,55 @@ const TIMEOUT = 25000;
 
 let counter = 0;
 
+/* ==========================================================================
+   Cache & request de-duplication
+   --------------------------------------------------------------------------
+   Setiap panggilan ke Apps Script butuh ~1-3 detik (cold start bisa lebih
+   lama). Tanpa cache, pindah menu di portal memuat ulang data yang sama
+   berulang kali. Cache singkat + de-dupe membuat navigasi terasa instan.
+
+   - READ  : hasil disimpan 20 detik (stale-while-revalidate).
+   - WRITE : respons langsung dipakai, cache lama di-nvalidate.
+   ========================================================================== */
+
+const READ_TTL = 20_000;
+
+/** Data yang jarang berubah boleh disimpan lebih lama. */
+const LONG_TTL = 60_000;
+
+const TTL_BY_ACTION = {
+  getSettings: LONG_TTL,
+  getCategories: LONG_TTL,
+  getProducts: LONG_TTL,
+  getUsers: LONG_TTL,
+};
+
+const cache = new Map();     // key -> { value, expires, inflight }
+const inflight = new Map();  // key -> Promise
+
+/** Kunci cache untuk sebuah aksi + payload. */
+function cacheKey(action, payload) {
+  const keys = Object.keys(payload || {}).sort();
+  if (!keys.length) return action;
+  return `${action}:${keys.map((k) => `${k}=${JSON.stringify(payload[k])}`).join('&')}`;
+}
+
+/** Aksi yang mengubah data — cache-nya harus dibuang setelah berhasil. */
+const WRITE_ACTIONS = new Set([
+  'saveProductRecord', 'deleteProductRecord',
+  'saveCategoryRecord', 'deleteCategoryRecord',
+  'saveUserRecord', 'deleteUserRecord',
+  'saveSettings', 'deleteTransactionRecord',
+  'setOrderStatus', 'setQueueEntryStatus', 'adjustStockRecord',
+  'saveTransaction', 'createOnlineOrder', 'payOrder',
+  'setupDatabase', 'resetDemoData', 'importDatabase',
+]);
+
+/** Buang semua cache (dipakai setelah mutasi). */
+function invalidateCache() {
+  cache.clear();
+}
+
 /** Nama callback unik per permintaan. */
 function callbackName() {
   counter += 1;
@@ -84,15 +133,54 @@ function call(action, payload = {}) {
   });
 }
 
-/** Bungkus hasil server: selalu bentuk { ok, error? }. */
+/**
+ * Bungkus hasil server: selalu bentuk { ok, error? }.
+ *
+ * Aksi baca memakai cache 20 detik; permintaan identik yang masih berjalan
+ * digabung ke satu panggilan server (de-dupe).
+ */
 async function safe(action, payload = {}) {
-  try {
-    const res = await call(action, payload);
-    if (res && typeof res === 'object') return res;
-    return { ok: false, error: 'Respons server tidak valid' };
-  } catch (err) {
-    return { ok: false, error: err.message || 'Gagal menghubungi server', offline: true };
+  const isWrite = WRITE_ACTIONS.has(action);
+  const key = cacheKey(action, payload);
+
+  if (!isWrite) {
+    const hit = cache.get(key);
+    if (hit && hit.expires > Date.now()) {
+      return hit.value;
+    }
+    // Permintaan yang sama masih berjalan -> tunggu, jangan panggil lagi.
+    const pending = inflight.get(key);
+    if (pending) {
+      try {
+        return await pending;
+      } catch (err) {
+        return { ok: false, error: err.message || 'Gagal menghubungi server', offline: true };
+      }
+    }
   }
+
+  const request = (async () => {
+    try {
+      const res = await call(action, payload);
+      if (res && typeof res === 'object') return res;
+      return { ok: false, error: 'Respons server tidak valid' };
+    } catch (err) {
+      return { ok: false, error: err.message || 'Gagal menghubungi server', offline: true };
+    }
+  })();
+
+  if (!isWrite) {
+    inflight.set(key, request);
+    const value = await request;
+    inflight.delete(key);
+    const ttl = TTL_BY_ACTION[action] || READ_TTL;
+    cache.set(key, { value, expires: Date.now() + ttl });
+    return value;
+  }
+
+  const value = await request;
+  if (value && value.ok !== false) invalidateCache();
+  return value;
 }
 
 /* ==========================================================================

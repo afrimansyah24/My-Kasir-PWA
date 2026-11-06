@@ -196,7 +196,7 @@ const SEED_SETTINGS = {
   storeLng: 107.6098,
   storeAddressShort: 'Merdeka 12, Bandung',
 
-  portalPin: '2580',
+  portalPin: '258000',
   qrisMerchant: 'MYKASIR AQUATIC',
   qrisNmid: 'ID1024398712345',
   receiptFooter: 'Terima kasih sudah belanja di My Kasir Aquatic!',

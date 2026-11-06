@@ -6,7 +6,7 @@
  *   map tiles    -> network first with cache fallback
  */
 
-const VERSION = 'mykasir-v1.4.0';
+const VERSION = 'mykasir-v1.4.2';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 

@@ -4,19 +4,43 @@
   <meta charset="utf-8">
   <title>My Kasir</title>
   <meta name="robots" content="noindex">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <script>
     /* Deep-link fallback untuk GitHub Pages (SPA).
-     * Lihat: https://github.com/rafgraph/spa-github-pages */
-    (function (l) {
-      var segmentKeep = 1;
-      l.replace(
-        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-        l.pathname.split('/').slice(0, 1 + segmentKeep).join('/') + '/?/' +
-        l.pathname.slice(1).split('/').slice(segmentKeep).join('/').replace(/&/g, '~and~') +
+     *
+     * GitHub Pages menjawab 404 untuk halaman seperti /My-Kasir-PWA/portal
+     * karena file-nya memang tidak ada. Halaman ini mengarahkan pengunjung
+     * ke /My-Kasir-PWA/?/portal — path yang memang ada — lalu app.js membaca
+     * path itu dari query dan merender tampilan yang sesuai.
+     *
+     * Konvensi: https://github.com/rafgraph/spa-github-pages
+     */
+    (function () {
+      var l = window.location;
+
+      // Di *.github.io aplikasi berada di folder repo (satu segmen),
+      // di domain sendiri aplikasi berada di root.
+      var isGithubPages = /\.github\.io$/i.test(l.hostname);
+      var segmentKeep = isGithubPages ? 1 : 0;
+
+      var parts = l.pathname.split('/');
+      var base = parts.slice(0, 1 + segmentKeep).join('/');
+      var rest = parts.slice(1 + segmentKeep).join('/');
+
+      // Kalau path-nya sudah root, tidak ada yang perlu dipulihkan.
+      if (!rest) {
+        l.replace(l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') + base + '/');
+        return;
+      }
+
+      var target = l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+        base + '/?/' + rest.replace(/&/g, '~and~') +
         (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
-        l.hash
-      );
-    }(window.location));
+        l.hash;
+
+      // location.href (bukan replace) — lebih andal di semua browser.
+      l.href = target;
+    }());
   </script>
 </head>
 <body></body>

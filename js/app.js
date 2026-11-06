@@ -4,6 +4,7 @@ import { $, h, icon, toast, esc, clamp, rupiah } from './util.js';
 import * as api from './api.js';
 import * as store from './store.js';
 import { refreshSettings } from './settings.js';
+import { gasConfigHint } from './config.js';
 import { loadCart, subscribe as subscribeCart } from './cart.js';
 import { mountStorefront } from './views/storefront.js';
 import { mountPortal } from './views/portal.js';
@@ -52,11 +53,28 @@ const BASE = (() => {
     // src berbentuk absolut setelah `document.scripts` dibaca, jadi aman dipecah.
     const entry = document.querySelector('script[src*="js/app.js"]')?.src;
     if (!entry) return '/';
-    const dir = new URL(entry, location.href).pathname.replace(/[^/]*$/, ''); // .../js/
-    return dir.replace(/\/js\/$/, '/') || '/';
+    // .../js/app.js -> .../js/ -> .../  (tanpa garis miring ganda di akhir)
+    const dir = new URL(entry, location.href).pathname.replace(/[^/]*$/, '');
+    const base = dir.replace(/\/js\/$/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+    return base ? base + '/' : '/';
   } catch {
     return '/';
   }
+})();
+
+/**
+ * Pasang <base href> supaya semua URL relatif menunjuk ke folder aplikasi.
+ *
+ * Tanpa ini, halaman pada deep-link seperti /My-Kasir-PWA/portal membuat
+ * "./assets/produk.webp" dan "./sw.js" salah resolve ke /My-Kasir-PWA/portal/…
+ * sehingga_many aset 404 dan service worker gagal terdaftar.
+ */
+(() => {
+  if (typeof document === 'undefined' || !BASE || BASE === '/') return;
+  if (document.querySelector('base[href]')) return;
+  const base = document.createElement('base');
+  base.href = new URL(BASE, location.href).href;
+  document.head.prepend(base);
 })();
 
 /** Tempel BASE di depan path versi aplikasi ('/' -> '/My-Kasir-PWA/').
@@ -93,27 +111,64 @@ export function go(path, { replace = false } = {}) {
 }
 
 /**
- * Halaman deep-link di GitHub Pages menjawab 404 karena berkasnya memang tidak
- * ada. 404.html di repositori ini mengalihkan pengunjung ke `?/portal`. Pulihkan
- * kembali jalurnya lalu buang query artefak itu dari bilah alamat.
+ * Halaman deep-link di GitHub Pages menjawab 404 karena berkafasnya memang
+ * tidak ada. 404.html mengarahkan pengunjung ke `?/portal`.
+ *
+ * Path asli TIDAK ditulis balik ke bilah alamat: path itu tidak punya berkas,
+ * jadi setiap reload (atau saat pengguna menyalin URL) akan 404 lagi.
+ * Sebaliknya path asli disimpan di sessionStorage dan dibaca router dari sana.
+ * Begitu pengguna Bergenavigasi lewat tautan dalam aplikasi, URL menjadi
+ * normal dan artefak `?/` hilang.
  */
+const DEEP_LINK_KEY = 'mykasir.deeplink';
+
 function restoreDeepLink() {
   const q = location.search;
   if (!q || q.length < 2 || q[1] !== '/') return false;
+
   const decoded = q
     .slice(1)
     .split('&')
     .map((s) => s.replace(/~and~/g, '&'))
-    .join('?');
+    .join('&');
+
   const qIdx = decoded.indexOf('?');
-  const pathPart = qIdx >= 0 ? decoded.slice(0, qIdx) : decoded;
+  let pathPart = qIdx >= 0 ? decoded.slice(0, qIdx) : decoded;
   const extra = qIdx >= 0 ? decoded.slice(qIdx) : '';
-  history.replaceState({ app: true }, '', withBase(pathPart) + extra + location.hash);
+
+  // 404.html menulis "portal" (tanpa garis miring depan) -> normalkan.
+  if (!pathPart.startsWith('/')) pathPart = '/' + pathPart;
+  pathPart = pathPart.replace(/\/{2,}/g, '/');
+  if (pathPart.length > 1) pathPart = pathPart.replace(/\/+$/, '') || '/';
+
+  try {
+    sessionStorage.setItem(DEEP_LINK_KEY, pathPart + extra);
+  } catch { /* ignore */ }
   return true;
 }
 
+/** Path yang tersimpan dari deep-link, kalau ada. */
+function pendingDeepLink() {
+  try {
+    return sessionStorage.getItem(DEEP_LINK_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
 function route() {
-  const path = normalizePath(location.pathname);
+  // Deep-link dari 404.html diprioritaskan: pathname saat ini masih "/"
+  // (atau path lain), sedangkan path yang benar tersimpan di sessionStorage.
+  //
+  // Catatan: path yang disimpan sudah relatif-aplikasi ("/portal"), bukan
+  // path server — jadi tidak boleh lewat normalizePath (yang menambah BASE).
+  const pending = pendingDeepLink();
+  let path = normalizePath(location.pathname);
+  if (pending) {
+    const deep = pending.split('?')[0].replace(/\/{2,}/g, '/');
+    if (deep) path = deep;
+    try { sessionStorage.removeItem(DEEP_LINK_KEY); } catch { /* ignore */ }
+  }
 
   let matched = null;
   let params = {};
@@ -142,6 +197,40 @@ function route() {
 }
 
 window.addEventListener('popstate', route);
+
+/**
+ * Tautan internal ditangani di sisi klien (SPA), bukan memuat ulang halaman.
+ *
+ * Tanpa ini, setiap klik ke "/portal" atau "/lacak" memicu permintaan ke
+ * server. Di GitHub Pages path seperti itu tidak punya berkas -> 404.
+ * Dengan History API, halaman tidak pernah dimuat ulang dan tidak pernah 404.
+ */
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.button !== 0) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+  const link = e.target.closest?.('a[href]');
+  if (!link) return;
+  if (link.target && link.target !== '_self') return;
+  if (link.hasAttribute('download')) return;
+  if (link.getAttribute('href')?.startsWith('#')) return;
+
+  const href = link.getAttribute('href');
+  let url;
+  try {
+    url = new URL(href, location.href);
+  } catch {
+    return;
+  }
+  if (url.origin !== location.origin) return;
+
+  // Normalkan ke path versi aplikasi (tanpa BASE) supaya cocok dengan ROUTES.
+  const appPath = normalizePath(url.pathname);
+  if (appPath === null) return;
+
+  e.preventDefault();
+  go(appPath + url.search + url.hash);
+});
 
 /* -------------------------------------------------------------------------
    Chrome
@@ -288,7 +377,30 @@ export function toggleTheme() {
    Boot
    ---------------------------------------------------------------------- */
 
+function showBootError(message) {
+  const root = document.getElementById('app');
+  if (!root) return;
+  root.innerHTML = '';
+  root.append(
+    h('div.gate', null,
+      h('div.gate__card', null,
+        h('div.gate__logo', null, icon('alert')),
+        h('h1.t-h1', null, 'Konfigurasi backend'),
+        h('p.t-body.mt-2.gate__error', null, message),
+        h('p.t-sm.mt-3', null, 'Buka berkas js/config.js — GAS_URL = URL Web App (/exec). Spreadsheet ID hanya di Apps Script → Script properties (SPREADSHEET_ID).'),
+        h('button.btn.btn--primary.mt-5', { onclick: () => location.reload() }, 'Muat ulang')
+      )
+    )
+  );
+}
+
 function boot() {
+  const misconfig = gasConfigHint();
+  if (misconfig) {
+    showBootError(misconfig);
+    return;
+  }
+
   applyTheme(currentTheme());
   loadCart();
 

@@ -762,6 +762,11 @@
   flex: 1;
 }
 
+/* View portal yang disembunyikan (cache per menu supaya pindah menu instan).
+   [hidden] perlu reinforcement explicit — beberapa display:none di base.css
+   bisa menimpanya. */
+.portal__pane[hidden] { display: none !important; }
+
 .rail-toggle { display: none; }
 
 @media (max-width: 900px) {
