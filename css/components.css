@@ -1,0 +1,337 @@
+/* ==========================================================================
+   My Kasir — additive components
+   --------------------------------------------------------------------------
+   core.css already owns: aurora, glass, typography, buttons, form controls,
+   chips/badges, modal/toast, tables, skeleton, spinner.
+   This file adds what those do not cover.
+   ========================================================================== */
+
+/* -------------------------------------------------------------------------
+   Surfaces
+   ---------------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--glass-dark-line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-1);
+}
+
+.card--pad { padding: var(--s-5); }
+
+.card--hover {
+  transition: transform var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out);
+}
+
+.card--hover:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--sh-3);
+}
+
+.card--glass {
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--sh-3);
+}
+
+/* -------------------------------------------------------------------------
+   Buttons — variants core.css does not define
+   ---------------------------------------------------------------------- */
+
+.btn--coral {
+  --btn-bg: linear-gradient(135deg, var(--coral) 0%, #ff7d95 100%);
+  --btn-fg: #fff;
+  --btn-brd: transparent;
+  box-shadow: 0 12px 30px -14px rgba(255, 92, 122, 0.75);
+}
+
+.btn--teal {
+  --btn-bg: linear-gradient(135deg, var(--mint) 0%, #22d3bb 100%);
+  --btn-fg: #04231f;
+  --btn-brd: transparent;
+  box-shadow: 0 12px 30px -14px rgba(15, 191, 168, 0.7);
+}
+
+.btn--soft {
+  --btn-bg: var(--surface-sunk);
+  --btn-fg: var(--ink-700);
+  --btn-brd: transparent;
+}
+
+.btn--soft:hover {
+  --btn-bg: rgba(16, 22, 43, 0.08);
+}
+
+.btn--outline {
+  --btn-bg: transparent;
+  --btn-fg: var(--ink-800);
+  --btn-brd: rgba(16, 22, 43, 0.16);
+}
+
+.btn--outline:hover {
+  --btn-bg: rgba(16, 22, 43, 0.04);
+}
+
+/* -------------------------------------------------------------------------
+   Chips / badges
+   ---------------------------------------------------------------------- */
+
+.badge--ok { background: var(--mint-soft); color: #0a7d6e; }
+.badge--warn { background: var(--amber-soft); color: #a86a00; }
+.badge--err { background: var(--coral-soft); color: #c02a4b; }
+.badge--info { background: var(--cobalt-soft); color: var(--cobalt-deep); }
+.badge--violet { background: var(--violet-soft); color: #5b3fd6; }
+.badge--solid { background: var(--ink-900); color: #fff; }
+.badge .ico { width: 12px; height: 12px; }
+
+.chip--cobalt.is-active {
+  background: linear-gradient(135deg, var(--cobalt), #4d64ff);
+}
+
+.dot--live { position: relative; }
+
+.dot--live::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  animation: pulse-ring 2s var(--ease) infinite;
+}
+
+/* -------------------------------------------------------------------------
+   Quantity stepper
+   ---------------------------------------------------------------------- */
+
+.qty {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunk);
+  overflow: hidden;
+  border: 1px solid var(--glass-dark-line);
+}
+
+.qty button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--ink-700);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.qty button:hover { background: var(--surface); }
+.qty button:disabled { color: var(--ink-300); pointer-events: none; }
+.qty button .ico { width: 14px; height: 14px; }
+
+.qty__val {
+  min-width: 30px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------
+   Drawer (cart)
+   ---------------------------------------------------------------------- */
+
+.drawer {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-strong);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
+  border-left: 1px solid var(--glass-line);
+  box-shadow: -20px 0 60px -20px rgba(16, 22, 43, 0.34);
+  transform: translateX(101%);
+  pointer-events: none;
+  transition: transform var(--t-slow) var(--ease-out);
+}
+
+.drawer.is-open {
+  transform: none;
+  pointer-events: auto;
+}
+
+.drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-5) var(--s-5) var(--s-4);
+  border-bottom: 1px solid var(--glass-dark-line);
+}
+
+.drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-4) var(--s-5);
+  overscroll-behavior: contain;
+}
+
+.drawer__foot {
+  padding: var(--s-4) var(--s-5) calc(var(--s-5) + var(--safe-b));
+  border-top: 1px solid var(--glass-dark-line);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+@media (max-width: 560px) {
+  .drawer {
+    top: auto;
+    width: 100%;
+    height: 92dvh;
+    border-radius: var(--r-2xl) var(--r-2xl) 0 0;
+    border-left: none;
+    transform: translateY(101%);
+  }
+  .drawer.is-open { transform: none; }
+}
+
+/* -------------------------------------------------------------------------
+   Empty state
+   ---------------------------------------------------------------------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: var(--s-10) var(--s-5);
+}
+
+.empty__ico {
+  width: 46px;
+  height: 46px;
+  color: var(--ink-300);
+  padding: 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface-sunk);
+}
+
+.empty .t-h2 { color: var(--ink-700); }
+.empty .t-body { max-width: 34ch; }
+
+/* -------------------------------------------------------------------------
+   Charts
+   ---------------------------------------------------------------------- */
+
+.chart { position: relative; width: 100%; }
+.chart__svg { overflow: visible; }
+
+.chart__grid {
+  stroke: rgba(16, 22, 43, 0.08);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.chart__label {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--ink-400);
+  letter-spacing: -0.02em;
+}
+
+.chart__donutValue {
+  font-family: var(--font);
+  font-size: 19px;
+  font-weight: 800;
+  fill: var(--ink-900);
+  letter-spacing: -0.03em;
+}
+
+.chart__donutLabel {
+  font-family: var(--font);
+  font-size: 11px;
+  fill: var(--ink-400);
+}
+
+.chart__line { animation: chart-draw 1000ms var(--ease-out) both; }
+.chart__area { animation: chart-fade 900ms var(--ease-out) both; }
+.chart__bar { animation: chart-rise 560ms var(--ease-out) both; transform-origin: bottom; }
+.chart__dot { animation: chart-pop 400ms var(--ease-spring) both; }
+
+@keyframes chart-draw {
+  from { stroke-dasharray: 1400; stroke-dashoffset: 1400; }
+  to { stroke-dasharray: 1400; stroke-dashoffset: 0; }
+}
+
+@keyframes chart-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chart-rise { from { opacity: 0; transform: scaleY(0.4); } to { opacity: 1; transform: scaleY(1); } }
+@keyframes chart-pop { from { opacity: 0; } to { opacity: 1; } }
+
+/* horizontal bars */
+.hbars { display: flex; flex-direction: column; gap: 14px; }
+
+.hbar__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.hbar__label { font-size: 13px; font-weight: 600; color: var(--ink-700); }
+.hbar__value { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink-500); }
+
+.hbar__track {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: rgba(16, 22, 43, 0.08);
+  overflow: hidden;
+}
+
+.hbar__fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--cobalt);
+  animation: hbar-grow 760ms var(--ease-out) both;
+  transform-origin: left;
+}
+
+@keyframes hbar-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* legend */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+.legend__item { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; }
+.legend__dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.legend__label { color: var(--ink-500); }
+.legend__value { font-family: var(--mono); font-weight: 600; color: var(--ink-700); }
+
+/* heat map */
+.heat {
+  display: grid;
+  grid-template-columns: repeat(13, 1fr);
+  gap: 4px;
+}
+
+.heat__cell {
+  aspect-ratio: 1;
+  border-radius: 4px;
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.heat__cell:hover { transform: scale(1.24); }
+
+/* stock bar (core.css defines the bar; this adds the fill) */
+.stock-bar__fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--mint);
+  transition: width var(--t-slow) var(--ease-out);
+}
+
+.stock-bar__fill--warn { background: var(--amber); }
+.stock-bar__fill--out { background: var(--coral); }

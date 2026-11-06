@@ -1,0 +1,44 @@
+{
+  "name": "My Kasir — Etalase & POS",
+  "short_name": "My Kasir",
+  "description": "Etalase toko online dan terminal kasir dalam satu aplikasi. Bisa dipasang di ponsel, tablet, maupun desktop.",
+  "lang": "id",
+  "dir": "ltr",
+  "id": "/my-kasir/",
+  "start_url": "./index.html?src=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#E8EDF9",
+  "theme_color": "#2F4BFF",
+  "categories": ["business", "productivity", "shopping"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Buka Kasir",
+      "short_name": "Kasir",
+      "description": "Langsung ke terminal kasir",
+      "url": "./index.html?src=pwa#/kasir",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Cek Pesanan",
+      "short_name": "Pesanan",
+      "description": "Lacak status pesanan pelanggan",
+      "url": "./index.html?src=pwa#/lacak",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Dashboard Owner",
+      "short_name": "Dashboard",
+      "description": "Ringkasan penjualan",
+      "url": "./index.html?src=pwa#/owner/dashboard",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

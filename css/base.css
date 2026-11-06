@@ -1,0 +1,188 @@
+/* ==========================================================================
+   My Kasir — utilities & motion
+   --------------------------------------------------------------------------
+   core.css owns the tokens, reset and primitives. This file adds the
+   spacing scale, layout utilities and the remaining type/motion helpers.
+   ========================================================================== */
+
+:root {
+  /* spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+
+  /* aliases onto the core token set */
+  --ink: var(--ink-800);
+  --ink-2: var(--ink-700);
+  --ink-3: var(--ink-500);
+  --ink-4: var(--ink-400);
+  --ink-5: var(--ink-300);
+
+  --bg-2: var(--bg-deep);
+  --surface-3: var(--surface-sunk);
+
+  --line: rgba(16, 22, 43, 0.1);
+  --line-2: rgba(16, 22, 43, 0.07);
+
+  --teal: var(--mint);
+  --teal-100: var(--mint-soft);
+  --cobalt-100: var(--cobalt-soft);
+  --coral-100: var(--coral-soft);
+  --amber-100: var(--amber-soft);
+  --violet-100: var(--violet-soft);
+
+  --font-display: var(--font);
+  --font-body: var(--font);
+  --font-mono: var(--mono);
+
+  --dur-1: var(--t-fast);
+  --dur-2: var(--t-base);
+  --dur-3: var(--t-slow);
+  --dur-4: 520ms;
+
+  --shell-max: var(--shell);
+  --topbar-h: var(--nav-h);
+
+  --glass-bg: var(--glass);
+  --glass-bg-strong: var(--glass-strong);
+  --glass-border: var(--glass-line);
+  --glass-shadow: var(--sh-2);
+  --glass-shadow-lg: var(--sh-4);
+  --sh-cobalt: var(--sh-glow);
+}
+
+/* -------------------------------------------------------------------------
+   Type helpers
+   ---------------------------------------------------------------------- */
+
+.t-sm {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-500);
+}
+
+.t-xs {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-400);
+}
+
+.t-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.t-gradient {
+  background: linear-gradient(100deg, var(--cobalt) 0%, var(--violet) 44%, var(--coral) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.t-cobalt { color: var(--cobalt); }
+.t-coral { color: var(--coral); }
+.t-teal { color: var(--mint); }
+.t-amber { color: var(--amber); }
+.t-ink3 { color: var(--ink-500); }
+.t-ink4 { color: var(--ink-400); }
+.t-strong { color: var(--ink-900); font-weight: 600; }
+.t-right { text-align: right; }
+.t-center { text-align: center; }
+.t-mono { font-family: var(--mono); }
+
+/* -------------------------------------------------------------------------
+   Layout utilities
+   ---------------------------------------------------------------------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.row-wrap { flex-wrap: wrap; }
+.col { display: flex; flex-direction: column; }
+.grow { flex: 1; min-width: 0; }
+.gap-1 { gap: var(--s-1); }
+.gap-2 { gap: var(--s-2); }
+.gap-3 { gap: var(--s-3); }
+.gap-4 { gap: var(--s-4); }
+.gap-5 { gap: var(--s-5); }
+.gap-6 { gap: var(--s-6); }
+.mt-2 { margin-top: var(--s-2); }
+.mt-3 { margin-top: var(--s-3); }
+.mt-4 { margin-top: var(--s-4); }
+.mt-5 { margin-top: var(--s-5); }
+.mt-6 { margin-top: var(--s-6); }
+.mb-2 { margin-bottom: var(--s-2); }
+.mb-3 { margin-bottom: var(--s-3); }
+.mb-4 { margin-bottom: var(--s-4); }
+.mb-5 { margin-bottom: var(--s-5); }
+
+.shell {
+  width: 100%;
+  max-width: var(--shell-max);
+  margin-inline: auto;
+  padding-inline: var(--s-5);
+}
+
+@media (max-width: 640px) {
+  .shell { padding-inline: var(--s-4); }
+}
+
+/* -------------------------------------------------------------------------
+   Motion
+   ---------------------------------------------------------------------- */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.94); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-up {
+  from { transform: translate3d(0, 100%, 0); }
+  to { transform: none; }
+}
+
+@keyframes float-y {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -10px, 0); }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.85); opacity: 0.7; }
+  70% { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+.anim-up { animation: fade-up var(--dur-4) var(--ease-out) both; }
+.anim-in { animation: fade-in var(--dur-3) var(--ease) both; }

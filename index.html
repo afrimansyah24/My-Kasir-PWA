@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">
+  <title>My Kasir — Toko & Point of Sale</title>
+  <meta name="description" content="My Kasir — etalase online dan point of sale untuk semua jenis bisnis. Katalog, keranjang, pembayaran QRIS, dan portal kasir dalam satu aplikasi.">
+  <meta name="theme-color" content="#2F4BFF" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0F24" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="My Kasir">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
+
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+
+  <link rel="preload" href="./fonts/PlusJakartaSans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/JetBrainsMono-latin.woff2" as="font" type="font/woff2" crossorigin>
+
+  <link rel="stylesheet" href="./css/core.css">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/layout.css">
+</head>
+<body>
+  <a href="#katalog" class="sr-only">Lompat ke katalog</a>
+
+  <div id="app">
+    <div class="gate">
+      <div class="gate__card">
+        <div class="gate__logo"><span class="spinner"></span></div>
+        <p class="t-body">Memuat My Kasir…</p>
+      </div>
+    </div>
+  </div>
+
+  <noscript>
+    <div style="padding:40px;text-align:center;font-family:system-ui">
+      <h1>My Kasir</h1>
+      <p>Aplikasi ini memerlukan JavaScript agar dapat digunakan.</p>
+    </div>
+  </noscript>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
