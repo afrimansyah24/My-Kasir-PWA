@@ -10,12 +10,12 @@ import {
   compressForStorage,
 } from '../util.js';
 import * as api from '../api.js';
-import * as store from '../store.js';
 import * as cart from '../cart.js';
 import { qrCanvas } from '../qr.js';
 import { areaChart, donutChart, legend, sparkline } from '../charts.js';
 import { go, withBase } from '../app.js';
 import { createPickerMap } from '../map.js';
+import { refreshSettings } from '../settings.js';
 
 let state = {
   data: null,
@@ -24,6 +24,7 @@ let state = {
   sort: 'featured',
   view: 'grid',
   trackCode: '',
+  onlineEnabled: true,
 };
 
 /* -------------------------------------------------------------------------
@@ -42,6 +43,8 @@ function brandMark(logo, fallbackIcon = 'store') {
 
 function header(data) {
   const c = cart.cart();
+  const online = state.onlineEnabled;
+
   return h('header.shop-head', null,
     h('div.shell', null,
       h('div.shop-head__inner', null,
@@ -53,35 +56,262 @@ function header(data) {
           )
         ),
 
-        h('div.shop-head__search.input-group', null,
+        h('div.shop-head__search.input-group', {
+          style: online ? undefined : { opacity: '0.45', pointerEvents: 'none' },
+        },
           icon('search', 'input-group__ico'),
           h('input.input.input--icon', {
             type: 'search',
-            placeholder: 'Cari produk…',
+            placeholder: online ? 'Cari produk…' : 'Toko online belum dibuka',
             'data-search': true,
             value: state.query,
             'aria-label': 'Cari produk',
+            disabled: !online,
           })
         ),
 
-        h('div.row.gap-2', null,
+        h('div.shop-head__actions.row.gap-2', null,
+          h('button.btn.btn--ghost.btn--icon', {
+            type: 'button',
+            title: 'Segarkan katalog',
+            'aria-label': 'Segarkan katalog',
+            onclick: async (e) => {
+              const btn = e.currentTarget;
+              if (btn.disabled) return;
+              btn.disabled = true;
+              btn.classList.add('is-spinning');
+              try {
+                api.bustCache();
+                await refreshSettings();
+                const fresh = await fetchFreshCatalog();
+                if (fresh && fresh.ok === false) throw new Error(fresh.error || 'Gagal memuat katalog');
+                if (!fresh?.store) throw new Error('Respons katalog tidak valid');
+                await refreshStorefront(fresh);
+                toast('Katalog disegarkan', 'ok', 1400);
+              } catch (err) {
+                toast(err.message || 'Gagal menyegarkan katalog', 'err');
+              } finally {
+                setTimeout(() => {
+                  btn.disabled = false;
+                  btn.classList.remove('is-spinning');
+                }, 600);
+              }
+            },
+          }, icon('refresh')),
+
           h('a.btn.btn--ghost.btn--icon', {
             href: withBase('/lacak'), 'data-nav': 'track',
             title: 'Lacak pesanan',
             'aria-label': 'Lacak pesanan',
-          }, icon('search')),
+          }, icon('navigation')),
+
           h('button.cart-btn', {
             onclick: openCart,
             'aria-label': 'Buka keranjang',
+            disabled: !online,
+            style: !online ? { opacity: '0.45' } : undefined,
           },
             icon('cart'),
             h('span.cart-btn__label', null, 'Keranjang'),
             h('span.cart-btn__count', { 'data-cart-count': true, 'data-empty': c.count ? '0' : '1' }, String(c.count))
           )
         )
-      )
+      ),
+
+      !online
+        ? h('div.shop-head__banner.callout', {
+          style: {
+            marginTop: '10px',
+            borderRadius: 'var(--r-md)',
+            alignItems: 'flex-start',
+            gap: '10px',
+          },
+        }, icon('alert'),
+          h('div', null,
+            h('div', { style: { fontWeight: 700 } }, 'Mohon maaf, toko online masih belum dibuka'),
+            h('div.t-sm', { style: { marginTop: '4px', opacity: '0.9' } },
+              'Anda tetap bisa melihat informasi toko dan melacak pesanan yang sudah ada.'
+            )
+          )
+        )
+        : null
     )
   );
+}
+
+/** Sinkronkan `state` dengan data katalog + flag pesanan online. */
+function applyOnlineGate(data) {
+  state.data = data;
+  state.onlineEnabled = data?.features?.onlineOrder !== false;
+  if (!state.onlineEnabled) {
+    state.query = '';
+    state.category = 'all';
+    cart.clearCart();
+  }
+  document.documentElement.dataset.storeOnline = state.onlineEnabled ? '1' : '0';
+}
+
+/** Referensi data yang terakhir dirender — mencegah render ganda. */
+let lastRenderedData = null;
+
+/**
+ * Tanda ringkas isi katalog (tanpa gambar base64).
+ *
+ * Revalidasi di latar belakang mengirim objek baru setiap kali walau isinya
+ * identik. Membandingkan referensi akan memaksa render ulang tiap TTL —
+ * fokus pencarian hilang dan layar berkedip. Signature ini murah dan hanya
+ * berubah bila ada produk/harga/stok/toko/fitur yang benar-benar berubah.
+ */
+function catalogSignature(data) {
+  if (!data) return '';
+  try {
+    const prods = (data.products || []).map(
+      (p) => `${p.id}:${p.price}:${p.available ? 1 : 0}:${p.stock ?? ''}:${p.name}`
+    ).join('|');
+    const cats = (data.categories || []).map((c) => `${c.id}:${c.name}`).join('|');
+    const st = data.store || {};
+    const f = data.features || {};
+    return [
+      prods, cats,
+      st.name, st.tagline, st.logo, st.phone, st.address,
+      st.deliveryFee, st.deliveryPerKm, st.deliveryRadiusKm,
+      f.onlineOrder, f.delivery, f.dineIn, f.customerName,
+      f.requireCustomerName, f.allowNegotiable, f.allowDiscount,
+    ].join('#');
+  } catch {
+    return String(Date.now());   // gagal membandingkan -> anggap berubah
+  }
+}
+
+let lastSignature = '';
+
+/**
+ * Ganti konten halaman toko dengan data baru (setelah refresh manual / server).
+ * Mempertahankan posisi scroll bila memungkinkan.
+ *
+ * Panggilan berulang dengan isi yang sama (mis. revalidasi latar belakang
+ * yang tidak mengubah apa pun) diabaikan supaya layar tidak berkedip dan
+ * fokus pencarian tetap utuh.
+ */
+async function refreshStorefront(data) {
+  const sig = catalogSignature(data);
+  if (sig && sig === lastSignature) {
+    lastRenderedData = data;   // isi sama -> cukup perbarui referensi
+    return;
+  }
+
+  const host = document.querySelector('.app');
+  if (!host) return;          // pengguna sedang di portal/antrean — jangan tandai
+
+  lastRenderedData = data;
+  lastSignature = sig;
+
+  const y = window.scrollY;
+  applyOnlineGate(data);
+
+  const search = h('input.input.input--icon', {
+    type: 'search',
+    placeholder: state.onlineEnabled ? 'Cari produk…' : 'Toko online belum dibuka',
+    'data-search': true,
+    value: state.query,
+    'aria-label': 'Cari produk',
+    disabled: !state.onlineEnabled,
+  });
+
+  search.addEventListener('input', debounce(() => {
+    if (!state.onlineEnabled) return;
+    state.query = search.value;
+    renderGrid();
+  }, 200));
+
+  host.innerHTML = '';
+  host.append(
+    header(data),
+    h('main.app__main', null,
+      hero(data),
+      catalog(data)
+    ),
+    footer(data)
+  );
+
+  const headSearch = host.querySelector('.shop-head__search input');
+  if (headSearch) {
+    headSearch.replaceWith(search);
+    search.addEventListener('input', debounce(() => {
+      if (!state.onlineEnabled) return;
+      state.query = search.value;
+      renderGrid();
+    }, 200));
+  }
+
+  renderGrid();
+  requestAnimationFrame(() => window.scrollTo(0, y));
+}
+
+function onFreshData(detail) {
+  if (!detail || !state.data) return;
+  const { action, value } = detail;
+  if (action === 'getPublicCatalogData' && value && value.store && Array.isArray(value.products)) {
+    refreshStorefront(value);
+    return;
+  }
+  if (action === 'getSettings' && value && typeof value === 'object' && value.ok !== false) {
+    const nextOnline = !!value.featureOnlineOrder;
+    const changed =
+      nextOnline !== state.onlineEnabled ||
+      value.storeName !== state.data.store.name ||
+      (value.storeLogo || '') !== (state.data.store.logo || '') ||
+      (value.storeTagline || '') !== (state.data.store.tagline || '');
+    if (!changed) return;
+
+    const merged = {
+      ...state.data,
+      store: { ...state.data.store, ...value },
+      features: {
+        ...(state.data.features || {}),
+        onlineOrder: nextOnline,
+        delivery: !!value.featureDelivery,
+        dineIn: !!value.featureDineIn,
+        customerName: !!value.featureCustomerName,
+        requireCustomerName: !!value.requireCustomerName,
+        allowNegotiable: !!value.allowNegotiable,
+        allowDiscount: !!value.allowDiscount,
+      },
+    };
+    // Paksa render: signature merged bisa sama bila hanya fitur berubah
+    // di luar bidang yang dibandingkan.
+    lastSignature = '';
+    refreshStorefront(merged);
+  }
+}
+
+let freshListenerAttached = false;
+
+/** Satu permintaan katalog pada satu waktu (tombol Segarkan + listener event). */
+let catalogFetchInflight = null;
+
+function fetchFreshCatalog() {
+  if (catalogFetchInflight) return catalogFetchInflight;
+  catalogFetchInflight = Promise.resolve(api.getPublicCatalogData())
+    .finally(() => { catalogFetchInflight = null; });
+  return catalogFetchInflight;
+}
+
+function scheduleFreshListener() {
+  // Cukup satu pasang listener selama hidup halaman — mountStorefront bisa
+  // dipanggil berulang saat pengguna berpindah antara toko ↔ portal.
+  if (freshListenerAttached) return;
+  freshListenerAttached = true;
+
+  window.addEventListener('mykasir:fresh', (e) => onFreshData(e?.detail));
+  window.addEventListener('mykasir:cache-bust', () => {
+    if (!state.data) return;
+    fetchFreshCatalog()
+      .then((v) => {
+        if (v && v.store && Array.isArray(v.products)) refreshStorefront(v);
+      })
+      .catch(() => { /* ignore */ });
+  });
 }
 
 /* -------------------------------------------------------------------------
@@ -89,6 +319,7 @@ function header(data) {
    ---------------------------------------------------------------------- */
 
 function hero(data) {
+  const online = state.onlineEnabled;
   const featured = data.products.filter((p) => p.available).slice(0, 4);
   const tiles = featured.length
     ? featured
@@ -100,26 +331,32 @@ function hero(data) {
         h('div', null,
           h('div.hero__badge', null,
             h('span.badge.badge--info', null, icon('sparkles'), 'Baru'),
-            h('span', null, `Belanja tanpa ribet, kirim hari ini`)
+            h('span', null, online
+              ? 'Belanja tanpa ribet, kirim hari ini'
+              : 'Toko online sedang tutup')
           ),
           h('h1.t-display', null,
             'Perlengkapan ', h('span.t-gradient', null, 'renang & olahraga'), ' terbaik untuk Anda.'
           ),
           h('p.hero__lead', null,
-            `${data.store.name} — ${data.store.tagline}. Pilih produk, tentukan pengiriman, dan lacak pesanan Anda dengan kode sederhana.`
+            online
+              ? `${data.store.name} — ${data.store.tagline}. Pilih produk, tentukan pengiriman, dan lacak pesanan Anda dengan kode sederhana.`
+              : `${data.store.name} — ${data.store.tagline}. Mohon maaf, toko online masih belum dibuka. Anda tetap bisa melacak pesanan yang sebelumnya dibuat.`
           ),
           h('div.hero__actions', null,
             h('button.btn.btn--primary.btn--lg', {
+              disabled: !online,
+              style: !online ? { opacity: '0.5' } : undefined,
               onclick: () => {
                 document.getElementById('katalog')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               },
             }, icon('grid'), 'Lihat katalog'),
-            h('a.btn.btn--ghost.btn--lg', { href: withBase('/lacak'), 'data-nav': 'track' }, icon('search'), 'Lacak pesanan')
+            h('a.btn.btn--ghost.btn--lg', { href: withBase('/lacak'), 'data-nav': 'track' }, icon('navigation'), 'Lacak pesanan')
           ),
           h('div.hero__stats', null,
             h('div.hero__stat', null,
-              h('b', null, String(data.products.length)),
-              h('span', null, 'produk tersedia')
+              h('b', null, String(online ? data.products.length : 0)),
+              h('span', null, online ? 'produk tersedia' : 'produk tersedia saat toko online dibuka')
             ),
             h('div.hero__stat', null,
               h('b', null, '10 menit'),
@@ -155,6 +392,8 @@ function categoryRail(data) {
     onclick: (e) => selectCategory(e.currentTarget, 'all'),
   }, 'Semua')];
 
+  if (!state.onlineEnabled) return h('div.rail', null, chips);
+
   for (const cat of data.categories) {
     const count = data.products.filter((p) => p.category === cat.id).length;
     if (!count) continue;
@@ -179,6 +418,9 @@ function selectCategory(btn, id) {
 
 function filtered(data) {
   let list = data.products.slice();
+
+  // Toko online ditutup -> katalog kosong, tidak ada produk yang bisa dipilih.
+  if (!state.onlineEnabled) return [];
 
   if (state.category !== 'all') {
     list = list.filter((p) => p.category === state.category);
@@ -255,6 +497,36 @@ function renderGrid() {
 
   const list = filtered(state.data);
 
+  if (!state.onlineEnabled) {
+    wrap.innerHTML = '';
+    wrap.append(emptyState(
+      'alert',
+      'Mohon maaf, toko online masih belum dibuka',
+      'Katalog produk sedang kosong dan pemesanan online belum tersedia. Silakan kembali lagi nanti.',
+      h('button.btn.btn--soft', {
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          btn.classList.add('is-spinning');
+          try {
+            api.bustCache();
+            const fresh = await fetchFreshCatalog();
+            if (fresh && fresh.ok === false) throw new Error(fresh.error || 'Gagal memuat katalog');
+            if (fresh?.store) await refreshStorefront(fresh);
+          } catch (err) {
+            toast(err.message || 'Gagal menyegarkan katalog', 'err');
+          } finally {
+            btn.disabled = false;
+            btn.classList.remove('is-spinning');
+          }
+        },
+      }, icon('refresh'), 'Coba lagi')
+    ));
+    const count = document.getElementById('catalog-count');
+    if (count) count.textContent = '0 produk';
+    return;
+  }
+
   if (!list.length) {
     wrap.innerHTML = '';
     wrap.append(emptyState(
@@ -283,20 +555,50 @@ function renderGrid() {
 }
 
 function catalog(data) {
+  const online = state.onlineEnabled;
+
   return h('section.catalog', { id: 'katalog' },
     h('div.shell', null,
       h('div.catalog__head', null,
         h('div', null,
           h('h2.t-h1', null, 'Katalog produk'),
           h('p.t-body', { style: { marginTop: '4px' } },
-            h('span', { id: 'catalog-count' }, `${data.products.length} produk`),
-            ' tersedia untuk dipesan online'
+            h('span', { id: 'catalog-count' }, `${online ? data.products.length : 0} produk`),
+            online ? ' tersedia untuk dipesan online' : ' — toko online belum dibuka'
           )
         ),
         h('div.row.gap-2', null,
+          h('button.btn.btn--soft.btn--icon', {
+            type: 'button',
+            title: 'Segarkan katalog',
+            'aria-label': 'Segarkan katalog',
+            onclick: async (e) => {
+              const btn = e.currentTarget;
+              if (btn.disabled) return;
+              btn.disabled = true;
+              btn.classList.add('is-spinning');
+              try {
+                api.bustCache();
+                await refreshSettings();
+                const fresh = await fetchFreshCatalog();
+                if (fresh && fresh.ok === false) throw new Error(fresh.error || 'Gagal memuat katalog');
+                if (fresh?.store) await refreshStorefront(fresh);
+                toast('Katalog disegarkan', 'ok', 1400);
+              } catch (err) {
+                toast(err.message || 'Gagal menyegarkan katalog', 'err');
+              } finally {
+                setTimeout(() => {
+                  btn.disabled = false;
+                  btn.classList.remove('is-spinning');
+                }, 600);
+              }
+            },
+          }, icon('refresh')),
+
           h('select.select', {
             'aria-label': 'Urutkan',
             style: { width: 'auto', minWidth: '160px' },
+            disabled: !online,
             onchange: (e) => {
               state.sort = e.target.value;
               renderGrid();
@@ -392,6 +694,10 @@ function openProduct(p, data) {
    ---------------------------------------------------------------------- */
 
 function addToCart(p, qty = 1) {
+  if (!state.onlineEnabled) {
+    toast('Mohon maaf, toko online masih belum dibuka', 'warn');
+    return;
+  }
   cart.addItem(p, qty);
   toast(`${p.name} masuk keranjang`, 'ok');
 }
@@ -495,6 +801,13 @@ function openCart() {
 
 function openCheckout() {
   const data = state.data;
+
+  // Toko online ditutup -> tidak boleh ada pesanan baru.
+  if (!state.onlineEnabled) {
+    toast('Mohon maaf, toko online masih belum dibuka', 'warn');
+    return;
+  }
+
   let payment = 'QRIS';
   let fulfilment = cart.cart().fulfilment === 'delivery' ? 'delivery' : 'pickup';
 
@@ -1157,7 +1470,7 @@ function footer(data) {
       ),
       h('div.row-between.mt-6', null,
         h('span.t-xs', null, `© ${new Date().getFullYear()} ${data.store.name}. Dibuat dengan My Kasir.`),
-        h('span.t-xs', null, 'Berjalan penuh secara lokal — data tersimpan di perangkat Anda.')
+        h('span.t-xs', null, 'Seluruh data toko tersimpan di Google Spreadsheet — selalu sinkron dengan kasir.')
       )
     )
   );
@@ -1185,7 +1498,7 @@ export function mountStorefront(view, { track = false, params = [], initialData 
         h('div.gate__logo', null, icon('alert')),
         h('h1.t-h1', null, 'Katalog tidak dimuat'),
         h('p.t-body.mt-2', null, message),
-        h('p.t-sm.mt-3', null, 'Periksa GAS_URL (Web App /exec) di js/config.js dan SPREADSHEET_ID di Apps Script. Kosongkan GAS_URL untuk mode demo lokal.'),
+        h('p.t-sm.mt-3', null, 'Periksa GAS_URL (Web App /exec) di js/config.js dan SPREADSHEET_ID di Apps Script. Aplikasi ini memakai Google Spreadsheet sebagai satu-satunya sumber data.'),
         h('div.row.gap-2.mt-5', null,
           h('button.btn.btn--ghost', { onclick: () => location.reload() }, icon('refresh'), 'Coba lagi'),
           h('a.btn.btn--primary', { href: withBase('/') }, icon('store'), 'Toko')
@@ -1211,18 +1524,22 @@ export function mountStorefront(view, { track = false, params = [], initialData 
       return;
     }
 
-    state.data = data;
+    applyOnlineGate(data);
+    lastRenderedData = data;
+    lastSignature = catalogSignature(data);
     bootPanel.remove();
 
     const search = h('input.input.input--icon', {
       type: 'search',
-      placeholder: 'Cari produk…',
+      placeholder: state.onlineEnabled ? 'Cari produk…' : 'Toko online belum dibuka',
       'data-search': true,
       value: state.query,
       'aria-label': 'Cari produk',
+      disabled: !state.onlineEnabled,
     });
 
     search.addEventListener('input', debounce(() => {
+      if (!state.onlineEnabled) return;
       state.query = search.value;
       renderGrid();
     }, 200));
@@ -1241,6 +1558,7 @@ export function mountStorefront(view, { track = false, params = [], initialData 
     if (headSearch) {
       headSearch.replaceWith(search);
       search.addEventListener('input', debounce(() => {
+        if (!state.onlineEnabled) return;
         state.query = search.value;
         renderGrid();
       }, 200));
@@ -1257,5 +1575,6 @@ export function mountStorefront(view, { track = false, params = [], initialData 
     if (code && !track) openTrack(code);
   };
 
+  scheduleFreshListener();
   boot();
 }

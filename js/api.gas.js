@@ -48,10 +48,136 @@ const TTL_BY_ACTION = {
   getCategories: LONG_TTL,
   getProducts: LONG_TTL,
   getUsers: LONG_TTL,
+  getDashboardData: LONG_TTL,
+  getTransactions: LONG_TTL,
+  // Etalase jarang berubah; tanpa ini setiap kunjungan memicu eksekusi
+  // Apps Script tiap 15 detik — itulah sebab "Memuat…" lama.
+  getPublicCatalogData: LONG_TTL,
 };
 
 const cache = new Map();     // key -> { value, fetchedAt, revalidating }
 const inflight = new Map();   // key -> Promise
+
+/* -------------------------------------------------------------------------
+   Cache persisten (L2 — localStorage)
+   --------------------------------------------------------------------------
+   Tanpa ini setiap refresh = reload penuh: katalog hilang lalu ditunggu
+   1-3 detik (atau lebih) sampai Apps Script menjawab.
+
+   Dengan L2, data terakhir yang diketahui langsung tampil seketika saat
+   aplikasi dibuka ulang, lalu diperbarui di latar belakang
+   (stale-while-revalidate). Efeknya: katalog tidak pernah "kosong" dan
+   halaman tidak pernah lama tertahan "Memuat…".
+   ---------------------------------------------------------------------- */
+
+const PERSIST_KEY = 'mykasir.cache.v1';
+
+/** Aksi yang layak disimpan (hasilnya kecil & sering dipakai). */
+const PERSIST_ACTIONS = new Set([
+  'getPublicCatalogData',
+  'getSettings',
+  'getCategories',
+  'getProducts',
+  // Dashboard = layar yang paling sering terlihat "Memuat…". Snapshot lama
+  // tetap ditampilkan dulu, lalu diperbarui di latar belakang (SWR).
+  'getDashboardData',
+  'getTransactions',
+]);
+
+/** Umur maksimum data persisten yang masih boleh ditampilkan (ms). */
+const PERSIST_MAX_AGE = {
+  getSettings: 10 * 60_000,             // pengaturan: 10 menit
+  getDashboardData: 60 * 60_000,        // ringkasan: 1 jam (lalu revalidate)
+  getTransactions: 30 * 60_000,         // daftar transaksi: 30 menit
+  getPublicCatalogData: 12 * 60 * 60_000,
+  getCategories: 12 * 60 * 60_000,
+  getProducts: 12 * 60 * 60_000,
+};
+
+/** Batas ukuran agar localStorage tidak meledak (base64 gambar produk). */
+const PERSIST_MAX_CHARS = 1_600_000;
+
+let persistStore = null;
+
+function loadPersist() {
+  if (persistStore) return persistStore;
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    persistStore = raw ? JSON.parse(raw) : {};
+    if (!persistStore || typeof persistStore !== 'object') persistStore = {};
+  } catch {
+    persistStore = {};
+  }
+  return persistStore;
+}
+
+function persistRead(action, payload) {
+  if (!PERSIST_ACTIONS.has(action)) return null;
+  const key = cacheKey(action, payload);
+  const hit = loadPersist()[key];
+  if (!hit || !hit.value) return null;
+  const maxAge = PERSIST_MAX_AGE[action] ?? PERSIST_MAX_AGE.getPublicCatalogData;
+  if (Date.now() - (hit.fetchedAt || 0) > maxAge) return null;
+  return hit;
+}
+
+function persistWrite(action, payload, value) {
+  if (!PERSIST_ACTIONS.has(action)) return;
+  const key = cacheKey(action, payload);
+  const store = { ...loadPersist(), [key]: { value, fetchedAt: Date.now() } };
+  try {
+    let raw = JSON.stringify(store);
+    // Keluarkan entri tertua bila terlalu besar (gambar produk = base64).
+    while (raw.length > PERSIST_MAX_CHARS) {
+      const keys = Object.keys(store).sort(
+        (a, b) => (store[a].fetchedAt || 0) - (store[b].fetchedAt || 0)
+      );
+      if (keys.length <= 1) break;
+      delete store[keys[0]];
+      raw = JSON.stringify(store);
+    }
+    localStorage.setItem(PERSIST_KEY, raw);
+    persistStore = store;
+  } catch {
+    /* localStorage penuh / diblokir -> cache persisten dilewati */
+  }
+}
+
+function persistClear() {
+  persistStore = {};
+  try { localStorage.removeItem(PERSIST_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * Kabari pemanggil bahwa data segar tiba di latar belakang.
+ *
+ * Toko (& portal) mendengarkan event ini untuk memperbarui tampilan —
+ * contoh: owner mematikan "Pesanan online" -> storefront langsung berubah
+ * menjadi "toko online belum dibuka" tanpa perlu refresh manual.
+ */
+function dispatchFresh(action, value) {
+  try {
+    window.dispatchEvent(new CustomEvent('mykasir:fresh', { detail: { action, value } }));
+  } catch { /* ignore */ }
+}
+
+/** Simpan hasil ke cache memori (+ L2 bila respons sukses) + kabari pendengar. */
+function storeResult(action, payload, key, value) {
+  const ok = value && typeof value === 'object' && value.ok !== false;
+  cache.set(key, { value, fetchedAt: Date.now(), revalidating: false });
+  if (ok) persistWrite(action, payload, value);
+  if (ok) dispatchFresh(action, value);
+  return value;
+}
+
+/** Tanam entri L1 dari L2 — memakai cap waktu lama agar TTL/SWR benar. */
+function seedFromPersist(action, payload) {
+  const hit = persistRead(action, payload);
+  if (!hit?.value) return null;
+  const key = cacheKey(action, payload);
+  cache.set(key, { value: hit.value, fetchedAt: hit.fetchedAt, revalidating: false });
+  return cache.get(key);
+}
 
 /** Kunci cache untuk sebuah aksi + payload. */
 function cacheKey(action, payload) {
@@ -80,9 +206,64 @@ const WRITE_ACTIONS = new Set([
  */
 let bundleSupported = null;
 
-/** Buang semua cache (dipakai setelah mutasi). */
+/**
+ * Jendela "abaikan cache" (ms).
+ *
+ * Dipasang oleh `bustCache()` (tombol Segarkan). Selama jendela ini terbuka,
+ * semua aksi baca membaca langsung dari server — baik cache memori maupun
+ * snapshot persisten dilewati — sehingga pengguna benar-benar melihat data
+ * terbaru, bukan salinan lama.
+ */
+let forceNetworkUntil = 0;
+
+function isForced() {
+  return Date.now() < forceNetworkUntil;
+}
+
+/**
+ * Buang cache memori + pastikan snapshot persisten (L2) tidak menahan
+ * perubahan baru (dipakai setelah mutasi).
+ *
+ * L2 tidak dihapus mentah-mentah — layar berikutnya tetap boleh menampilkan
+ * cadangan terakhir secara seketika. Sebagai gantinya:
+ *   1. cap waktu entri dimundurkan melewati TTL miliknya sendiri, sehingga
+ *      entri selalu dianggap BASI -> selalu ada revalidasi ke server;
+ *   2. entri `getSettings` dihapus, supaya "Simpan" lalu `refreshSettings()`
+ *      membaca nilai BARU dari server (bukan cadangan pra-simpan).
+ */
 function invalidateCache() {
   cache.clear();
+
+  const now = Date.now();
+  const store = loadPersist();
+  let changed = false;
+
+  for (const key of Object.keys(store)) {
+    const entry = store[key];
+    if (!entry) continue;
+
+    const action = key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
+
+    // Pengaturan harus dibaca ulang dari server setelah penulisan.
+    if (action === 'getSettings') {
+      delete store[key];
+      changed = true;
+      continue;
+    }
+
+    const ttl = TTL_BY_ACTION[action] || READ_TTL;
+    const staleAt = now - (ttl + 1_000);
+    if ((entry.fetchedAt || 0) > staleAt) {
+      entry.fetchedAt = staleAt;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    try {
+      localStorage.setItem(PERSIST_KEY, JSON.stringify(store));
+    } catch { /* ignore */ }
+  }
 }
 
 /** Nama callback unik per permintaan. */
@@ -167,7 +348,9 @@ async function safe(action, payload = {}) {
   const key = cacheKey(action, payload);
 
   if (!isWrite) {
-    const hit = cache.get(key);
+    const forced = isForced();
+    let hit = forced ? null : (cache.get(key) || seedFromPersist(action, payload));
+
     if (hit) {
       const age = Date.now() - hit.fetchedAt;
       const ttl = TTL_BY_ACTION[action] || READ_TTL;
@@ -210,8 +393,7 @@ async function safe(action, payload = {}) {
     inflight.set(key, request);
     const value = await request;
     inflight.delete(key);
-    cache.set(key, { value, fetchedAt: Date.now(), revalidating: false });
-    return value;
+    return storeResult(action, payload, key, value);
   }
 
   const value = await request;
@@ -227,7 +409,7 @@ async function safe(action, payload = {}) {
 async function fetchInto(key, action, payload) {
   const res = await call(action, payload);
   if (res && typeof res === 'object' && res.ok !== false) {
-    cache.set(key, { value: res, fetchedAt: Date.now(), revalidating: false });
+    storeResult(action, payload, key, res);
   }
   return res;
 }
@@ -252,7 +434,8 @@ let bundleQueue = [];
  */
 function bundleSafe(action, payload) {
   const key = cacheKey(action, payload);
-  const hit = cache.get(key);
+  const forced = isForced();
+  let hit = forced ? null : (cache.get(key) || seedFromPersist(action, payload));
 
   if (hit) {
     const age = Date.now() - hit.fetchedAt;
@@ -325,7 +508,7 @@ async function flushBundle() {
         safe(req.action, req.payload).then(req.resolve, req.reject);
         continue;
       }
-      cache.set(req.key, { value, fetchedAt: Date.now(), revalidating: false });
+      storeResult(req.action, req.payload, req.key, value);
       req.resolve(value);
     }
   } catch (err) {
@@ -539,9 +722,16 @@ export function buildQrisPayload(code, amount) {
   return `QRIS|MYKSR|${code}|ID.CO.QRIS.WWW|${amountStr}|MYKASIR AQUATIC|`;
 }
 
-/** Refresh paksa — dipakai tombol "Muat ulang". */
+/** Refresh paksa — dipakai tombol "Segarkan data". */
 export function bustCache() {
   invalidateCache();
+  // Selama 5 detik ke depan semua baca langsung ke server (lewati cache).
+  // Cukup untuk satu putaran refresh, tidak cukup lama untuk memperlambat
+  // navigasi biasa sesudahnya.
+  forceNetworkUntil = Date.now() + 5_000;
+  try {
+    window.dispatchEvent(new CustomEvent('mykasir:cache-bust'));
+  } catch { /* ignore */ }
 }
 
 /** Uji koneksi ke backend (tanpa cache). */

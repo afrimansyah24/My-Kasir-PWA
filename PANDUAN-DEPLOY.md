@@ -24,7 +24,7 @@ GitHub Pages  ──HTTPS──►  index.html + js/ + css/ …
 GAS Web App URL  ──►  Spreadsheet + Drive
 ```
 
-**Mode saat ini:** aplikasi berjalan penuh di **localStorage** (demo). File `js/api.js` sudah berbentuk seperti API GAS; cukup ganti isinya dengan `fetch` ke URL Web App ketika backend siap.
+**Mode saat ini:** aplikasi **wajib** memakai Google Spreadsheet sebagai satu-satunya sumber data. Tidak ada lagi mode demo / basis data lokal. `js/api.js` memakai `js/api.gas.js` (JSONP ke Web App Apps Script) dan data bisnis dibaca/tulis lewat Spreadsheet. Perangkat hanya menyimpan cache baca sementara + preferensi (tema, sesi login, keranjang).
 
 ---
 
@@ -57,6 +57,9 @@ GitHub = **sumber kebenaran kode** + **hosting frontend** lewat GitHub Pages.
 | `tools/` | Skrip Python generate aset (dev only) |
 | `.github/workflows/` | CI clasp (opsional) |
 | `docs/tmp/`, `.tmp-debug/` | Screenshot sementara — **jangan commit** |
+
+> **Perubahan v1.8.0:** `js/store.js` dan `js/api.local.js` (mode demo) sudah
+> **dihapus**. Hanya `js/api.gas.js` yang tersisa sebagai sumber data.
 
 ### 1.3 Contoh `.gitignore`
 
@@ -132,6 +135,27 @@ Tab yang disiapkan (sesuai demo): Settings, Categories, Products, Users, Transac
 | Dashboard membaca sheet `Transactions` 5× | Cache baca di server (TTL 5 detik) + bundle |
 | Cache lama "menunggu" 20 detik tanpa pembaruan | **Stale-while-revalidate**: data lama langsung tampil, diperbarui di belakang layar |
 | `cancelExpiredOnlineOrders` tiap 60 detik | Setiap 5 menit, dan hanya saat tab terlihat |
+
+**Cache berlapis di sisi peramban (v1.7.0):**
+
+| Lapisan | Isi | Lama hidup |
+|---------|-----|------------|
+| **L1** | cache memori di tabbrowser | TTL pendek per aksi |
+| **L2** | snapshot `localStorage` (`mykasir.cache.v1`) | bertahan setelah tab ditutup |
+
+- Data L2 yang sudah basi **langsung ditampilkan**, lalu diperbarui di latar belakang.
+- **Revalidasi otomatis**: katalog, pengaturan, dashboard, transaksi, kategori, produk.
+- **Jaringan gagal** → snapshot lama tetap tampil (bukan halaman kosong).
+- Tombol **Segarkan** (ikon ↻) memaksa baca **langsung ke server** selama 5 detik,
+  sehingga hasil yang tampil benar-benar data terbaru.
+- Halaman yang gagal dimuat tidak lagi menggantung: setelah 12 detik muncul
+  tombol *Coba lagi* + *Bersihkan cache*.
+
+**Catatan:** snapshot L2 sengaja tidak dihapus total saat ada penulisan — ia
+dipertahankan sebagai cadangan agar layar berikutnya tetap tampil seketika,
+serta ditandai *basi* agar revalidasi ke server pasti dijalankan. Entri
+`getSettings` justru dihapus agar hasil “Simpan” selalu dibaca ulang dari
+server.
 
 **Langkah wajib setelah memperbarui backend:** `gas/Code.gs` versi baru menambah
 aksi `getPortalBundle` + cache..apps Script harus **di-deploy ulang**:
@@ -256,18 +280,44 @@ GitHub Actions + `clasp` **tidak wajib**; Cloudflare **tidak dipakai** di alur i
 |--------|----------------|--------|
 | Layar putih / module error | Buka lewat `file://` | Pakai GitHub Pages atau `python3 -m http.server` |
 | API gagal dari Pages | CORS / deployment GAS | Web app "Anyone"; `doPost` return JSON + CORS |
-| Data tidak sinkron | Masih mode demo | Pastikan `api.js` memanggil GAS, bukan hanya `store.js` |
-| PWA tidak update | Cache service worker | Naikkan `mykasir-v*` di `sw.js`, hard refresh |
+| Data tidak sinkron | Spreadsheet salah / cache basi | **Portal → Segarkan** (ikon ↻) atau **Pengaturan → Data → Bersihkan cache** |
+| "Backend GAS belum dikonfigurasi" | `GAS_URL` kosong/tidak valid | Isi URL Web App `/exec` di `js/config.js` atau lewat UI |
+| Halaman lama masih muncul | Cache service worker | Naikkan `mykasir-v*` di `sw.js`, hard refresh |
 | Font/icon rusak | MIME type | Pages biasanya OK; VPS perlu `.woff2` & `.webmanifest` benar |
 
 ---
 
 ## 6. Referensi cepat
 
-- **Frontend only (demo):** cukup GitHub Pages + isi repo bagian §1.1; data di perangkat (localStorage).
-- **Produksi multi-perangkat:** GitHub Pages (frontend) + GAS Web App (backend) + Spreadsheet (+ Drive untuk foto).
+- **Wajib backend:** GitHub Pages (frontend) + GAS Web App (backend) + Spreadsheet (+ Drive untuk foto).
+- Tidak ada lagi mode tanpa server — data toko hanya bisa di-host di Spreadsheet.
 - PRD lengkap: `PRD-My-Kasir-Revisi.md` (strategi clasp + GitHub sebagai sumber kebenaran).
 
 ---
 
 *Terakhir diselaraskan dengan struktur proyek `my-kasir-pwa` (PWA vanilla ES modules, folder `gas/` siap diisi backend GAS).*
+
+---
+
+## 7. Ringkasan rilis
+
+### v1.8.0 — full Spreadsheet (mode demo dihapus)
+
+- **Seluruh data bisnis ada di Google Spreadsheet**: produk, kategori, transaksi,
+  pesanan online, antrean, pengguna, pengaturan.
+- `js/store.js` (skema + seed lokal) dan `js/api.local.js` (mode demo)
+  **dihapus**; `js/api.js` kini khusus GAS.
+- Transaksi POS **selalu** divalidasi & dicatat di server (stok dipotong di
+  Spreadsheet), bukan di perangkat.
+- Portal → Pengaturan → Data punya panel baru **“Data di perangkat ini”**:
+  tombol *Bersihkan cache baca* dan *Hapus semua data perangkat*.
+- Label “Mode demo” di UI dihapus; status server kini selalu “Server aktif”.
+
+### v1.7.0 — kecepatan muat & Kebersahan Pengaturan
+
+- Halaman tidak lagi menggantung di “Memuat…” (failsafe + tombol coba lagi).
+- Katalog tampil instan dari snapshot lokal, diperbarui di belakang layar.
+- Pengaturan memakai **draf + tombol Simpan**; ada stempel “terakhir disimpan”
+  dan tombol Batalkan.
+- Etalase bisa dikunci lewat fitur **Pesanan Online**.
+- Header toko & portal rapi di **portrait** maupun **landscape**.

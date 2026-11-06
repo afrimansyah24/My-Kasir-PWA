@@ -2,7 +2,6 @@
 
 import { $, h, icon, toast, esc, clamp, rupiah } from './util.js';
 import * as api from './api.js';
-import * as store from './store.js';
 import { refreshSettings } from './settings.js';
 import { gasConfigHint } from './config.js';
 import { loadCart, subscribe as subscribeCart } from './cart.js';
@@ -391,6 +390,28 @@ export function toggleTheme() {
    Boot
    ---------------------------------------------------------------------- */
 
+/**
+ * Katalog terakhir yang disimpan di localStorage (L2).
+ * Dipakai agar refresh halaman tidak kembali ke layar "Memuat…" kosong.
+ */
+function readCatalogSeed() {
+  const PERSIST_KEY = 'mykasir.cache.v1';
+  const MAX_AGE = 12 * 60 * 60_000;
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return null;
+    const store = JSON.parse(raw);
+    const hit = store.getPublicCatalogData;
+    if (!hit?.value) return null;
+    if (Date.now() - (hit.fetchedAt || 0) > MAX_AGE) return null;
+    const v = hit.value;
+    if (!v || v.ok === false || !v.store || !Array.isArray(v.products)) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
 function showBootError(message) {
   const root = document.getElementById('app');
   if (!root) return;
@@ -424,10 +445,19 @@ function boot() {
   // Pengaturan & katalog diambil BERSAMAAN. Di mode GAS permintaan yang
   // muncul bersamaan digabung jadi satu eksekusi Apps Script — jadi
   // render pertama hanya butuh 1Network call, bukan 2.
+  const seededCatalog = readCatalogSeed();
+
   const hydration = Promise.all([
     refreshSettings(),
-    api.getPublicCatalogData().catch(() => null),
+    seededCatalog
+      ? Promise.resolve(seededCatalog)
+      : api.getPublicCatalogData().catch(() => null),
   ]);
+
+  // Bila katalog sudah ditampilkan dari snapshot, tetap segarkan di latar.
+  if (seededCatalog) {
+    Promise.resolve().then(() => api.getPublicCatalogData().catch(() => null));
+  }
 
   // Simpan katalog hasil boot; dipakai storefront agar tak request 2x.
   app.catalogPromise = hydration.then(([, catalog]) => catalog || undefined);

@@ -41,10 +41,13 @@ export function mountPortal(view, params = []) {
     return;
   }
 
-  // Pulihkan sesi dari tab sebelumnya agar tidak diminta login berulang.
+  // Pulihkan sesi agar kembali ke toko / back / refresh TIDAK logout.
+  // (localStorage, bukan sessionStorage — sesi tetap hidup di tab mana pun
+  //  sampai pengguna menekan "Keluar" secara sadar.)
   if (!session) {
     try {
-      const saved = JSON.parse(sessionStorage.getItem(ROLE_KEY) || 'null');
+      const saved = JSON.parse(localStorage.getItem(ROLE_KEY) || 'null')
+        || JSON.parse(sessionStorage.getItem(ROLE_KEY) || 'null');   // migrasi sesi lama
       if (saved && saved.role) session = saved;
     } catch { /* ignore */ }
   }
@@ -231,7 +234,7 @@ function loginGate() {
         return;
       }
       session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id };
-      try { sessionStorage.setItem(ROLE_KEY, JSON.stringify(session)); } catch { /* ignore */ }
+      try { localStorage.setItem(ROLE_KEY, JSON.stringify(session)); } catch { /* ignore */ }
       const app = document.getElementById('app');
       app.innerHTML = '';
       app.append(portalShell(''));
@@ -363,7 +366,8 @@ function portalShell(active = '') {
               confirmLabel: 'Keluar',
             });
             session = null;
-            try { sessionStorage.removeItem(ROLE_KEY); } catch { /* ignore */ }
+            try { localStorage.removeItem(ROLE_KEY); } catch { /* ignore */ }
+            try { sessionStorage.removeItem(ROLE_KEY); } catch { /* ignore lama */ }
             go('/');
           },
         }, icon('logout'), 'Keluar')
@@ -391,18 +395,58 @@ function portalShell(active = '') {
     }
 
     body.innerHTML = '';
-    body.append(h('div.row.gap-2.mb-4', null, h('span.spinner'), h('span.t-sm', null, 'Memuat…')));
+    const loadingRow = h('div.row.gap-2.mb-4', null, h('span.spinner'), h('span.t-sm', null, 'Memuat…'));
+    body.append(loadingRow);
+
+    // Failsafe: jangan pernah membiarkan layar "Memuat…" menggantung.
+    // Bila server lambat/gagal, tampilkan tombol coba lagi setelah 12 detik.
+    let settled = false;
+    const failsafe = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      body.innerHTML = '';
+      body.append(
+        h('div.row.gap-2.mb-4', null, h('span.spinner'), h('span.t-sm', null, 'Server lambat merespons…')),
+        h('div.row.gap-2', null,
+          h('button.btn.btn--primary', {
+            onclick: () => {
+              viewCache.delete(current);
+              renderView();
+            },
+          }, icon('refresh'), 'Coba lagi'),
+          h('button.btn.btn--ghost', {
+            onclick: () => api.bustCache(),
+          }, 'Bersihkan cache')
+        )
+      );
+    }, 12_000);
 
     Promise.resolve(viewFactory[current]?.())
       .then((node) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(failsafe);
         if (!node) throw new Error('Menu tidak tersedia');
         viewCache.set(current, node);
         showView(node);
       })
       .catch((err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(failsafe);
         console.error(err);
         body.innerHTML = '';
-        body.append(emptyState('alert', 'Gagal memuat', err.message || 'Terjadi kesalahan.'));
+        body.append(
+          emptyState('alert', 'Gagal memuat', err.message || 'Terjadi kesalahan.'),
+          h('div.row.gap-2.mt-3', { style: { justifyContent: 'center' } },
+            h('button.btn.btn--primary', {
+              onclick: () => {
+                viewCache.delete(current);
+                renderView();
+              },
+            }, icon('refresh'), 'Coba lagi')
+          )
+        );
       });
   };
 
@@ -426,6 +470,31 @@ function portalShell(active = '') {
       }, icon('list')),
       h('div.grow', null, titleEl, subEl),
       h('div.row.gap-2', null,
+        // Segarkan manual: buang cache + muat ulang view yang sedang aktif.
+        h('button.btn.btn--icon.btn--ghost', {
+          'aria-label': 'Segarkan data',
+          title: 'Segarkan data dari server',
+          onclick: async (e) => {
+            const btn = e.currentTarget;
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.classList.add('is-spinning');
+            try {
+              api.bustCache();
+              await refreshSettings();
+              viewCache.delete(current);     // paksa render ulang dari server
+              renderView();
+              toast('Data disegarkan', 'ok', 1400);
+            } catch (err) {
+              toast(err.message || 'Gagal menyegarkan data', 'err');
+            } finally {
+              setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('is-spinning');
+              }, 700);
+            }
+          },
+        }, icon('refresh')),
         h('span.badge.badge--info', null, h('span.dot.dot--live'), session?.role === 'owner' ? 'Owner' : 'Kasir'),
         h('div.avatar', null, initials(session?.name || 'O'))
       )
@@ -1925,12 +1994,100 @@ async function settingsView() {
   let tab = 'umum';
   const host = h('div');
 
+  /* ------------------------------------------------------------------
+     Model draf.
+
+     Semua perubahan Settings dikumpulkan di sini dan HANYA ditulis ke
+     Spreadsheet saat tombol "Simpan" ditekan. Efeknya:
+       - tidak ada request sia-sia setiap kali field disentuh,
+       - label "terakhir disimpan" tidak pernah berubah sendiri,
+         hanya setelah penyimpanan benar-benar berhasil.
+     ---------------------------------------------------------------- */
+  const draft = { ...s };
+  const dirty = new Set();
+
+  const SAVED_AT_KEY = 'mykasir.settings.savedAt';
+
+  const savedLabel = h('div.t-xs', {
+    style: { marginTop: '2px', opacity: '0.75' },
+  });
+
+  const dirtyLabel = h('span.t-xs', {
+    style: { fontWeight: '600' },
+  });
+
+  const saveBtn = h('button.btn.btn--primary', {
+    type: 'button',
+    onclick: () => save(),
+  }, icon('check'), 'Simpan perubahan');
+
+  const updateSaveState = () => {
+    const n = dirty.size;
+    saveBtn.disabled = n === 0;
+    dirtyLabel.textContent = n
+      ? `${n} perubahan belum disimpan`
+      : 'Semua perubahan tersimpan';
+    dirtyLabel.style.color = n ? 'var(--amber, #d97706)' : 'var(--ink-400)';
+  };
+
+  const markDirty = (key) => {
+    dirty.add(key);
+    updateSaveState();
+  };
+
+  /** Ubah nilai draf hanya bila benar-benar berbeda dari nilai tersimpan. */
+  const setDraft = (key, value) => {
+    if (String(draft[key] ?? '') === String(value ?? '')) return;
+    draft[key] = value;
+    markDirty(key);
+  };
+
+  // Stempel "terakhir disimpan" disimpan di perangkat agar tidak berubah
+  // saat halaman di-refresh — hanya berubah setelah penyimpanan nyata.
+  let savedAt = 0;
+  try {
+    savedAt = Number(localStorage.getItem(SAVED_AT_KEY) || 0) || 0;
+  } catch { /* ignore */ }
+  savedLabel.textContent = savedAt
+    ? `Terakhir disimpan: ${fmtDateTime(savedAt)}`
+    : 'Belum ada penyimpanan pada perangkat ini';
+
+  const save = async () => {
+    if (!dirty.size) return;
+    saveBtn.disabled = true;
+    try {
+      const patch = {};
+      for (const key of dirty) patch[key] = draft[key];
+
+      const res = await api.saveSettings(patch);
+      if (res && res.ok === false) {
+        toast(res.error || 'Gagal menyimpan pengaturan', 'err');
+        return;
+      }
+
+      Object.assign(s, patch);
+      dirty.clear();
+
+      savedAt = Date.now();
+      try { localStorage.setItem(SAVED_AT_KEY, String(savedAt)); } catch { /* ignore */ }
+      savedLabel.textContent = `Terakhir disimpan: ${fmtDateTime(savedAt)}`;
+
+      await refreshSettings();
+      updateSaveState();
+      toast('Pengaturan disimpan', 'ok');
+    } catch (err) {
+      toast(err.message || 'Gagal menyimpan pengaturan', 'err');
+    } finally {
+      saveBtn.disabled = false;
+      updateSaveState();
+    }
+  };
+
   const switchRow = (key, label, hint) => {
-    const input = h('input', { type: 'checkbox', checked: !!s[key] });
-    input.addEventListener('change', async () => {
-      await api.saveSettings({ [key]: input.checked });
-      refreshSettings();
-      toast('Pengaturan disimpan', 'ok', 1400);
+    const input = h('input', { type: 'checkbox', checked: !!draft[key] });
+    input.addEventListener('change', () => {
+      if (!!draft[key] === input.checked) return;
+      setDraft(key, input.checked);
     });
     return h('div.row-between', { style: { padding: '12px 0', borderBottom: '1px solid var(--line-2)' } },
       h('div.grow', null,
@@ -1942,11 +2099,9 @@ async function settingsView() {
   };
 
   const textRow = (key, label, hint, type = 'text') => {
-    const input = h('input.input', { type, value: s[key] ?? '' });
-    input.addEventListener('change', async () => {
-      await api.saveSettings({ [key]: type === 'number' ? Number(input.value) || 0 : input.value });
-      refreshSettings();
-      toast('Disimpan', 'ok', 1400);
+    const input = h('input.input', { type, value: draft[key] ?? '' });
+    input.addEventListener('input', () => {
+      setDraft(key, type === 'number' ? (Number(input.value) || 0) : input.value);
     });
     return h('div.field', null,
       h('label', null, label),
@@ -1958,6 +2113,9 @@ async function settingsView() {
   /**
    * Baris upload gambar (logo toko / foto QRIS).
    * Gambar dikompres dulu supaya muat di satu sel Spreadsheet.
+   *
+   * Berkas yang dipilih langsung tampil di preview, tetapi BARU ditulis ke
+   * Spreadsheet setelah tombol "Simpan perubahan" ditekan.
    */
   const imageRow = (key, label, hint, { square = false, maxSize = 640 } = {}) => {
     const preview = h('div.img-preview', {
@@ -1965,11 +2123,31 @@ async function settingsView() {
         ? { width: '72px', height: '72px', borderRadius: 'var(--r-md)' }
         : { width: '148px', height: '148px', borderRadius: 'var(--r-md)' },
     });
-    const value = s[key] || '';
-    if (value) preview.append(h('img', { src: value, alt: label }));
 
     const fileInput = h('input', { type: 'file', accept: 'image/*' });
     fileInput.style.display = 'none';
+
+    const removeBtn = h('button.btn.btn--sm.btn--ghost', {
+      onclick: () => {
+        preview.innerHTML = '';
+        setDraft(key, '');
+        removeBtn.style.display = 'none';
+        toast(`${label} siap dihapus`, 'ok', 1600);
+      },
+    }, icon('close'), 'Hapus');
+
+    const paint = () => {
+      preview.innerHTML = '';
+      const v = draft[key] || '';
+      if (v) {
+        preview.append(h('img', { src: v, alt: label }));
+        removeBtn.style.display = '';
+      } else {
+        removeBtn.style.display = 'none';
+      }
+    };
+
+    paint();
 
     const doUpload = async (file) => {
       if (!file) return;
@@ -1979,11 +2157,9 @@ async function settingsView() {
       }
       try {
         const dataUrl = await compressForStorage(file, { maxSize });
-        await api.saveSettings({ [key]: dataUrl });
-        preview.innerHTML = '';
-        preview.append(h('img', { src: dataUrl, alt: label }));
-        refreshSettings();
-        toast(`${label} diperbarui`, 'ok');
+        setDraft(key, dataUrl);
+        paint();
+        toast(`${label} siap disimpan`, 'ok', 1600);
       } catch (err) {
         toast(err.message || 'Gagal mengunggah gambar', 'err');
       }
@@ -1991,17 +2167,6 @@ async function settingsView() {
 
     fileInput.addEventListener('change', () => doUpload(fileInput.files?.[0]));
     preview.addEventListener('click', () => fileInput.click());
-
-    const removeBtn = value
-      ? h('button.btn.btn--sm.btn--ghost', {
-        onclick: async () => {
-          await api.saveSettings({ [key]: '' });
-          preview.innerHTML = '';
-          refreshSettings();
-          toast(`${label} dihapus`, 'ok');
-        },
-      }, icon('close'), 'Hapus')
-      : null;
 
     return h('div.field', null,
       h('label', null, label),
@@ -2026,7 +2191,7 @@ async function settingsView() {
   const courierRow = () => {
     let list = [];
     try {
-      const raw = s.couriers;
+      const raw = draft.couriers;
       list = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
       if (!Array.isArray(list)) list = [];
     } catch { list = []; }
@@ -2035,9 +2200,8 @@ async function settingsView() {
     const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
     const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon (mis. 0812-3456-7890)' });
 
-    const persist = async () => {
-      await api.saveSettings({ couriers: JSON.stringify(list) });
-      refreshSettings();
+    const syncDraft = () => {
+      setDraft('couriers', JSON.stringify(list));
     };
 
     const renderList = () => {
@@ -2056,9 +2220,9 @@ async function settingsView() {
             ),
             h('button.btn.btn--sm.btn--icon.btn--ghost', {
               'aria-label': 'Hapus kurir',
-              onclick: async () => {
+              onclick: () => {
                 list.splice(i, 1);
-                await persist();
+                syncDraft();
                 renderList();
               },
             }, icon('close'))
@@ -2067,7 +2231,7 @@ async function settingsView() {
       });
     };
 
-    const add = async () => {
+    const add = () => {
       const name = nameInput.value.trim();
       const phone = phoneInput.value.trim();
       if (!name) {
@@ -2077,9 +2241,8 @@ async function settingsView() {
       list.push({ name, phone });
       nameInput.value = '';
       phoneInput.value = '';
-      await persist();
+      syncDraft();
       renderList();
-      toast('Kurir ditambahkan', 'ok');
     };
 
     renderList();
@@ -2103,7 +2266,7 @@ async function settingsView() {
           icon('info'),
           api.mode === 'gas'
             ? 'Mode server aktif — data dibaca & ditulis ke Google Spreadsheet.'
-            : 'Mode demo lokal — data hanya tersimpan di perangkat ini. Isi GAS_URL di js/config.js untuk memakai Spreadsheet.'
+            : 'Server belum terhubung — isi GAS_URL di js/config.js untuk memakai Google Spreadsheet.'
         ),
 
         h('div.split-2', null,
@@ -2172,20 +2335,22 @@ async function settingsView() {
       );
     } else if (tab === 'lokasi') {
       // Tampilkan koordinat yang benar-benar valid (data rusak disamarkan).
-      const rawLat = Number(s.storeLat);
-      const rawLng = Number(s.storeLng);
+      // Baca dari DRAFT supaya perubahan belum disimpan tidak hilang saat
+      // tab dipindah.
+      const rawLat = Number(draft.storeLat);
+      const rawLng = Number(draft.storeLng);
       const okLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90;
       const okLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180;
       const latInput = h('input.input', { type: 'number', value: okLat ? rawLat : -6.9147, step: 'any' });
       const lngInput = h('input.input', { type: 'number', value: okLng ? rawLng : 107.6098, step: 'any' });
-      const radiusInput = h('input.input', { type: 'number', value: s.deliveryRadiusKm ?? 0, step: '0.1', min: '0' });
+      const radiusInput = h('input.input', { type: 'number', value: draft.deliveryRadiusKm ?? 0, step: '0.1', min: '0' });
       const coordLabel = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.75' } });
 
       const picker = createPickerMap({
-        lat: Number(s.storeLat) || -6.9147,
-        lng: Number(s.storeLng) || 107.6098,
+        lat: Number(draft.storeLat) || -6.9147,
+        lng: Number(draft.storeLng) || 107.6098,
         zoom: 15,
-        radiusKm: Number(s.deliveryRadiusKm) || 0,
+        radiusKm: Number(draft.deliveryRadiusKm) || 0,
         height: 400,
         onChange: ({ lat, lng }) => {
           latInput.value = lat.toFixed(6);
@@ -2194,20 +2359,16 @@ async function settingsView() {
         },
       });
 
-      const savePoint = async () => {
+      const savePoint = () => {
         const lat = Number(latInput.value);
         const lng = Number(lngInput.value);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
           toast('Koordinat tidak valid', 'err');
           return;
         }
-        const res = await api.saveSettings({ storeLat: lat, storeLng: lng });
-        if (res && res.ok === false) {
-          toast(res.error || 'Gagal menyimpan lokasi', 'err');
-          return;
-        }
-        refreshSettings();
-        toast('Lokasi toko disimpan', 'ok');
+        setDraft('storeLat', lat);
+        setDraft('storeLng', lng);
+        coordLabel.textContent = `Titik toko: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
       };
 
       latInput.addEventListener('change', () => {
@@ -2218,12 +2379,10 @@ async function settingsView() {
         picker.setPoint(latInput.value, lngInput.value);
         savePoint();
       });
-      radiusInput.addEventListener('change', async () => {
+      radiusInput.addEventListener('change', () => {
         const km = Number(radiusInput.value) || 0;
         picker.setRadius(km);
-        await api.saveSettings({ deliveryRadiusKm: km });
-        refreshSettings();
-        toast('Radius layanan disimpan', 'ok', 1400);
+        setDraft('deliveryRadiusKm', km);
       });
 
       host.append(
@@ -2245,7 +2404,6 @@ async function settingsView() {
               h('div.field__hint', null, 'Lingkaran biru pada peta adalah area layanan. 0 = tanpa batas jarak. Kasir/pelanggan otomatis ditolak bila titik tujuan di luar radius.')
             ),
             h('div.row.gap-2.mt-3', null,
-              h('button.btn.btn--primary', { onclick: savePoint }, icon('check'), 'Simpan lokasi'),
               h('button.btn.btn--soft', {
                 onclick: () => {
                   navigator.geolocation?.getCurrentPosition((pos) => {
@@ -2310,8 +2468,7 @@ async function settingsView() {
       const connectBlock = h('div.panel.mb-4', null,
         h('div.panel__head', null,
           h('h3.t-h3', null, 'Hubungkan Google Spreadsheet'),
-          h('span', { class: `badge ${api.mode === 'gas' ? 'badge--ok' : 'badge--warn'}` },
-            api.mode === 'gas' ? 'Server aktif' : 'Mode demo')
+          h('span.badge.badge--ok', null, 'Server aktif')
         ),
         h('div.panel__body', null,
           h('p.t-body.mb-3', null,
@@ -2366,16 +2523,13 @@ async function settingsView() {
           h('div.panel__head', null, h('h3.t-h3', null, 'Database & data')),
           h('div.panel__body', null,
             h('p.t-body.mb-4', null,
-              api.mode === 'gas'
-                ? 'Data tersimpan di Google Spreadsheet melalui backend Apps Script. Tab: Settings, Categories, Products, Users, Transactions, OnlineOrders, Queue, dan Counter.'
-                : 'Seluruh data tersimpan di perangkat ini (localStorage) dengan struktur yang sama persis seperti sheet Google: Products, Categories, Transactions, OnlineOrders, Users, Queue, dan Settings.'
+              'Seluruh data tersimpan di Google Spreadsheet melalui backend Apps Script. ' +
+              'Tab: Settings, Categories, Products, Users, Transactions, OnlineOrders, Queue, dan Counter.'
             ),
 
             h('div.callout.mb-4', null,
               icon('info'),
-              api.mode === 'gas'
-                ? 'Mode server aktif. SPREADSHEET_ID diisi di Apps Script → Script properties. Mengganti ID di sana akan mengganti seluruh database yang dipakai.'
-                : 'Mode demo aktif — data hanya tersimpan di perangkat ini. Tempel URL Web App di panel “Hubungkan Google Spreadsheet” di atas untuk beralih ke Spreadsheet.'
+              'SPREADSHEET_ID diisi di Apps Script → Script properties. Mengganti ID di sana akan mengganti seluruh database yang dipakai.'
             ),
 
             h('div.col.gap-3', null,
@@ -2474,9 +2628,7 @@ async function settingsView() {
                 onclick: async () => {
                   const ok = await confirmDialog({
                     title: 'Reset ke data contoh?',
-                    body: api.mode === 'gas'
-                      ? 'Semua transaksi, produk, dan pengaturan di SPREADSHEET akan diganti dengan data awal. Tindakan ini tidak bisa dibatalkan.'
-                      : 'Semua transaksi, produk, dan pengaturan Anda akan diganti dengan data awal.',
+                    body: 'Semua transaksi, produk, dan pengaturan di SPREADSHEET akan diganti dengan data awal. Tindakan ini tidak bisa dibatalkan.',
                     confirmLabel: 'Reset sekarang',
                   });
                   if (!ok) return;
@@ -2489,6 +2641,64 @@ async function settingsView() {
                   setTimeout(() => location.reload(), 700);
                 },
               }, icon('refresh'), 'Reset ke data contoh')
+            )
+          )
+        ),
+
+        /* --- Panel data yang tersimpan di perangkat -------------------- */
+        h('div.panel.mt-4', null,
+          h('div.panel__head', null,
+            h('h3.t-h3', null, 'Data di perangkat ini'),
+            h('span.badge.badge--info', null, 'Bukan database')
+          ),
+          h('div.panel__body', null,
+            h('p.t-body.mb-4', null,
+              'Seluruh data toko (produk, transaksi, pesanan, pengaturan, antrean) ada di Google Spreadsheet — ' +
+              'bukan di perangkat ini. Yang disimpan di perangkat hanya:'
+            ),
+            h('ul.t-body', { style: { margin: '0 0 16px', paddingLeft: '20px' } },
+              h('li', { style: { marginBottom: '4px' } },
+                h('b', null, 'Cache baca'), ' — salinan sementara katalog & pengaturan supaya halaman tampil instan. Aman dihapus; isinya diambil ulang dari server.'),
+              h('li', { style: { marginBottom: '4px' } },
+                h('b', null, 'Preferensi'), ' — tema, sesi login, dan keranjang yang sedang berjalan.')
+            ),
+            h('div.callout.mb-4', null,
+              icon('info'),
+              'Menghapus cache membuat kunjungan berikutnya menunggu balasan Apps Script (±2 detik) sekali saja. Tidak ada data yang hilang — data tetap ada di Spreadsheet.'
+            ),
+            h('div.col.gap-3', null,
+              h('button.btn.btn--soft', {
+                onclick: async () => {
+                  const ok = await confirmDialog({
+                    title: 'Bersihkan cache di perangkat ini?',
+                    body: 'Cache baca akan dihapus. Tema, sesi login, dan keranjang tetap disimpan. Data di Spreadsheet tidak tersentuh.',
+                    confirmLabel: 'Bersihkan cache',
+                    danger: false,
+                  });
+                  if (!ok) return;
+                  api.bustCache();
+                  await refreshSettings();
+                  toast('Cache perangkat dibersihkan', 'ok');
+                },
+              }, icon('trash'), 'Bersihkan cache baca'),
+
+              h('button.btn.btn--ghost', {
+                style: { color: 'var(--coral)', borderColor: 'rgba(255,92,122,0.4)' },
+                onclick: async () => {
+                  const ok = await confirmDialog({
+                    title: 'Hapus semua data perangkat?',
+                    body: 'Cache, tema, sesi login, dan keranjang akan dihapus dari perangkat ini. Anda akan diminta login ulang. Data di Spreadsheet tidak tersentuh.',
+                    confirmLabel: 'Hapus semua',
+                  });
+                  if (!ok) return;
+                  try {
+                    localStorage.clear();
+                    sessionStorage.clear();
+                  } catch { /* ignore */ }
+                  toast('Data perangkat dihapus — memuat ulang…', 'ok');
+                  setTimeout(() => location.reload(), 700);
+                },
+              }, icon('trash'), 'Hapus semua data perangkat')
             )
           )
         )
@@ -2518,8 +2728,33 @@ async function settingsView() {
     );
   }
 
+  updateSaveState();
+
+  const toolbar = h('div.toolbar.settings-toolbar', null,
+    h('div.grow', null,
+      h('div.t-sm', null, 'Perubahan disimpan ke Spreadsheet hanya setelah tombol Simpan ditekan.'),
+      savedLabel,
+      dirtyLabel
+    ),
+    h('div.row.gap-2', null,
+      h('button.btn.btn--ghost', {
+        type: 'button',
+        onclick: () => {
+          if (!dirty.size) return;
+          // Kembalikan isi form ke nilai tersimpan.
+          for (const key of dirty) draft[key] = s[key];
+          dirty.clear();
+          updateSaveState();
+          render();
+          toast('Perubahan dibatalkan', 'ok', 1400);
+        },
+      }, 'Batalkan'),
+      saveBtn
+    )
+  );
+
   render();
-  return h('div', null, tabBar, host);
+  return h('div', null, tabBar, toolbar, host);
 }
 
 /* ==========================================================================

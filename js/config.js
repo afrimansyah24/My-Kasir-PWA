@@ -5,8 +5,9 @@
  * │  Isi GAS_URL di sini, ATAU lewat UI: Portal → Pengaturan → Data.      │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
- * Mode demo (tanpa server):
- *   Biarkan GAS_URL kosong → data di localStorage perangkat.
+ * Mode server (wajib):
+ *   GAS_URL harus terisi — seluruh data aplikasi (produk, transaksi,
+ *   pesanan, pengaturan) berada di Google Spreadsheet.
  *
  * Mode produksi (Google Sheets):
  *   1. Spreadsheet — buat Google Sheet baru.

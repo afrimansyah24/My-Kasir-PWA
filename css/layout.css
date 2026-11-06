@@ -40,6 +40,23 @@
   align-items: center;
   gap: var(--s-4);
   height: var(--nav-h);
+  min-width: 0;
+}
+
+/* Brand tidak boleh mendorong kolom aksi keluar layar. */
+.shop-head__inner > .brand {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shop-head__inner > .brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Kelompok ikon (refresh, lacak, keranjang) selalu utuh di ujung kanan. */
+.shop-head__actions {
+  flex: none;
+  align-items: center;
+  margin-left: auto;
 }
 
 .brand {
@@ -1546,11 +1563,65 @@
   .modal--wide { width: calc(100vw - 20px); }
 }
 
-/* Header toko menumpuk rapi di layar sempit */
-@media (max-width: 760px) {
-  .shop-head__inner { flex-wrap: wrap; }
-  .shop-head__search { order: 3; flex-basis: 100%; max-width: none; }
+/* -------------------------------------------------------------------------
+   Header toko: potret (HP tegak) — ikon tidak saling tumpuk
+   --------------------------------------------------------------------------
+   Pada lebar sempit, teks merebut tempat sehingga kolom aksi tertimpa.
+   Aturan: brand dipangkas (ellipsis), pencarian turun ke baris sendiri,
+   dan kelompok ikon tetap menempel di kanan sebagai satu blok utuh.
+   ---------------------------------------------------------------------- */
+@media (max-width: 760px) and (orientation: portrait) {
+  .shop-head__inner {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 10px 0;
+    row-gap: 8px;
+  }
+  .shop-head__inner > .brand { order: 1; flex: 1 1 auto; }
+  .shop-head__actions { order: 2; flex: none; }
+  .shop-head__search {
+    order: 3;
+    flex: 1 0 100%;
+    max-width: none;
+    min-width: 0;
+  }
   .hero h1 { max-width: none; }
+}
+
+/* Layar sangat sempit: teks brand diringkas agar ruang ikon aman. */
+@media (max-width: 560px) and (orientation: portrait) {
+  .shop-head__inner { gap: var(--s-3); }
+  .brand { font-size: 15px; gap: 8px; }
+  .brand__mark { width: 30px; height: 30px; border-radius: 10px; }
+  .brand__sub { display: none; }
+}
+
+/* -------------------------------------------------------------------------
+   Header toko: landscape (HP terbaring) — satu baris penuh, layar maksimal
+   --------------------------------------------------------------------------
+   Sebelumnya aturan portrait ikut berlaku sehingga pencarian turun ke baris
+   kedua: header jadi setinggi dua baris dan konten tersingkir ke bawah.
+   Sekarang landscape selalu satu baris dan memanfaatkan seluruh lebar.
+   ---------------------------------------------------------------------- */
+@media (max-height: 620px) and (orientation: landscape) {
+  .shop-head { padding-top: 0; }
+  .shop-head__inner {
+    flex-wrap: nowrap;
+    height: 54px;
+    padding: 0;
+    gap: var(--s-3);
+  }
+  .shop-head__search { flex: 1 1 auto; max-width: none; min-width: 0; }
+  .shop-head__banner { margin-top: 0 !important; padding: 6px 10px !important; }
+  .shop-head__banner .t-sm { display: none; }
+
+  /* Header portal: satu baris, tanpa pemborosan vertikal. */
+  .portal__top {
+    height: 54px;
+    padding-block: 0 !important;
+    gap: var(--s-3);
+  }
+  .portal__body { padding-top: var(--s-4); }
 }
 
 /* Layar lebar: manfaatkan ruang, jangan menyisakan kosong berlebih */
@@ -1572,6 +1643,42 @@
   .rail-nav__item { min-height: 44px; }
 }
 
+/* -------------------------------------------------------------------------
+   Portal header portrait: judul & ikon tidak boleh saling tumpuk
+   ---------------------------------------------------------------------- */
+@media (max-width: 760px) and (orientation: portrait) {
+  .portal__top {
+    gap: var(--s-3);
+    padding-inline: var(--s-4);
+  }
+  .portal__top > .grow { min-width: 0; overflow: hidden; }
+  .portal__top > .grow .t-h1,
+  .portal__top > .grow .t-h2,
+  .portal__top > .grow h1,
+  .portal__top > .grow h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .portal__top > .row { flex: none; margin-left: auto; }
+  /* Badge peran tidak perlu memperebutkan ruang di layar sempit. */
+  .portal__top .badge--info { display: none; }
+}
+
+/* Toolbar pengaturan: tombol Simpan selalu terlihat di layar kecil. */
+.settings-toolbar {
+  position: sticky;
+  top: calc(var(--nav-h) + var(--safe-t));
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid var(--glass-dark-line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-1);
+  padding: var(--s-3) var(--s-4);
+}
+[data-theme='dark'] .settings-toolbar { background: rgba(10, 15, 36, 0.88); }
+@media (max-width: 560px) {
+  .settings-toolbar { position: static; }
+}
+
 /* Landscape pendek (HP terbaring / tablet): kompresi vertikal supaya
    tidak ada fitur yang terpotong di bawah. */
 @media (max-height: 560px) and (orientation: landscape) {
@@ -1585,7 +1692,7 @@
   .modal { max-height: 96dvh; }
   .modal__head { padding-top: 16px; padding-bottom: 10px; }
   .modal__body { padding-bottom: 14px; }
-  .portal__top { padding-block: 8px; }
+  .portal__top { padding-block: 0 !important; }
 }
 
 /* Aman di HP dengan notch/rounded: hormati safe area */

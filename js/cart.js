@@ -1,10 +1,11 @@
 /* My Kasir — cart state, QRIS rendering and receipt data.
  *
  * The cart lives in memory (and is mirrored to localStorage so a refresh does
- * not lose an in-progress basket).
+ * not lose an in-progress basket). It is a per-device preference, NOT a
+ * business record: the actual sale is always written to the Spreadsheet via
+ * api.saveTransaction().
  */
 
-import * as store from './store.js';
 import * as api from './api.js';
 import { settings } from './settings.js';
 import { orderCode, haversineKm, loadImage } from './util.js';
@@ -206,30 +207,11 @@ export async function checkoutOffline({ payment, cashier, customer, table, fulfi
     status: 'paid',
   };
 
-  // Mode GAS: validasi stok & pencatatan terjadi di server.
-  if (api.mode === 'gas') {
-    const res = await api.saveTransaction(payload);
-    if (!res.ok) throw new Error(res.error || 'Gagal menyimpan transaksi');
-    const tx = res.transaction;
-    return { tx, receipt: buildReceipt(tx) };
-  }
-
-  // Mode lokal: validasi & potong stok di perangkat.
-  for (const it of items) {
-    const p = store.product(it.id);
-    if (!p) throw new Error(`Produk "${it.name}" tidak ditemukan`);
-    if (p.trackStock && p.stock < it.qty) {
-      throw new Error(`Stok ${it.name} tersisa ${p.stock} ${p.unit}`);
-    }
-  }
-
-  const tx = store.addTransaction(payload);
-
-  for (const it of items) {
-    const p = store.product(it.id);
-    if (p?.trackStock) store.adjustStock(it.id, -it.qty);
-  }
-
+  // Pencatatan & validasi stok terjadi di server (Google Spreadsheet).
+  // Tidak ada lagi pencatatan lokal.
+  const res = await api.saveTransaction(payload);
+  if (!res.ok) throw new Error(res.error || 'Gagal menyimpan transaksi');
+  const tx = res.transaction;
   return { tx, receipt: buildReceipt(tx) };
 }
 

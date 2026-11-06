@@ -11,11 +11,23 @@ Aplikasi web progresif (**PWA**) untuk etalase publik, kasir POS, dashboard pemi
 | Portal internal | `/portal` | Gate PIN → POS, dashboard, pesanan online, antrean, produk, laporan, transaksi, pengguna, pengaturan |
 | Layar antrean | `/antrean` | Nomor antrean fullscreen + bell + TTS (Web Speech) |
 
-## Demo lokal
+## Sumber data: Google Spreadsheet
 
-Data disimpan di **localStorage** (mode demo). Backend Google Apps Script dapat dihubungkan lewat `js/api.js` (facade sudah mengikuti bentuk respons GAS).
+Seluruh data aplikasi — produk, kategori, transaksi, pesanan online, antrean,
+pengguna, dan pengaturan — berada di **Google Spreadsheet**, diakses lewat
+**Google Apps Script Web App** (`/exec`). Tidak ada basis data lokal.
 
-**PIN portal demo:** `2580`
+Perangkat hanya menyimpan:
+- **cache baca** (`mykasir.cache.v1`) — salinan sementara supaya halaman tampil
+  instan tanpa menunggu Apps Script (±2 detik); isinya selalu diambil ulang dari
+  server,
+- **preferensi** — tema, sesi login, dan keranjang yang sedang berjalan.
+
+Keduanya bisa dibersihkan kapan saja dari **Portal → Pengaturan → Data**.
+
+> **PIN portal awal:** `2580` (ubah lewat **Portal → Pengaturan**).
+
+### Menjalankan secara lokal
 
 ```bash
 cd my-kasir-pwa
@@ -24,6 +36,7 @@ python3 -m http.server 8080
 ```
 
 > Wajib dilayani lewat HTTP(S), bukan `file://`, agar service worker dan ES modules berjalan.
+> Aplikasi tetap membutuhkan backend Apps Script yang sudah ter-deploy.
 
 ## Instalasi PWA
 
@@ -41,12 +54,13 @@ my-kasir-pwa/
 ├── css/          # design system (aurora, glass, layout responsif)
 ├── js/
 │   ├── app.js    # router & PWA bootstrap
-│   ├── store.js  # skema data + seed demo
-│   ├── api.js    # API facade
+│   ├── api.js    # API facade (Google Apps Script)
+│   ├── api.gas.js# implementasi GAS: JSONP + cache berlapis
 │   ├── qr.js     # generator QR ISO 18004 (CRC16 + Reed–Solomon)
 │   ├── charts.js # grafik SVG (area, bar, donut, heatmap)
 │   ├── cart.js   # keranjang & struk termal 80mm
 │   └── views/    # storefront, portal, queue
+├── gas/          # backend Google Apps Script (Code.gs)
 ├── assets/products/  # ilustrasi produk WebP
 ├── icons/            # ikon PWA
 ├── fonts/            # Plus Jakarta Sans, JetBrains Mono
@@ -66,7 +80,7 @@ Pratinjau lengkap ada di folder `docs/screenshots/` (01–17): etalase, keranjan
 
 1. Deploy folder statis ke hosting HTTPS (Netlify, Cloudflare Pages, Firebase Hosting, nginx, dll.).
 2. Pastikan `Content-Type` benar untuk `.webmanifest` dan `.woff2`.
-3. Ganti endpoint GAS di `js/api.js` bila backend siap; seed demo dapat di-reset lewat **Setup database** di portal.
+3. Deploy `gas/Code.gs` sebagai Web App (`/exec`) dan isi `SPREADSHEET_ID` di Apps Script → Script properties. Jalankan **setupDatabase()** sekali lewat Portal → Pengaturan → Data.
 4. Bump versi cache di `sw.js` (`mykasir-v*`) setiap rilis agar klien memperbarui aset.
 
 ## Lisensi & aset

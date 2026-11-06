@@ -3,7 +3,7 @@
  *
  * Beberapa bagian UI (keranjang, struk, peta, layar antrean) membutuhkan
  * pengaturan secara sinkron, sementara sumber data bisa async (server GAS
- * atau localStorage). Modul ini menyimpan salinan terakhir dan memperbarui
+ * atau cache lokal). Modul ini menyimpan salinan terakhir dan memperbarui
  * dirinya saat boot maupun setelah pengaturan diubah.
  */
 
@@ -43,6 +43,45 @@ const FALLBACK = {
 
 let cache = { ...FALLBACK };
 const listeners = new Set();
+
+/** snapshot L2 (`mykasir.cache.v1`) — sama seperti js/api.gas.js */
+const PERSIST_KEY = 'mykasir.cache.v1';
+const SETTINGS_MAX_AGE = 10 * 60_000;
+
+function seedFromPersist() {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return;
+    const store = JSON.parse(raw);
+    const hit = store.getSettings;
+    if (!hit?.value || typeof hit.value !== 'object' || hit.value.ok === false) return;
+    if (Date.now() - (hit.fetchedAt || 0) > SETTINGS_MAX_AGE) return;
+    cache = { ...FALLBACK, ...hit.value };
+  } catch {
+    /* ignore */
+  }
+}
+
+seedFromPersist();
+
+/**
+ * Sinkronkan cache pengaturan saat server mengirim versi baru.
+ *
+ * Menyimpan "Simpan" di portal memicu revalidasi di latar belakang; event
+ * ini memastikan nilai yang dipakai struk/POS/etalase ikut ter-update tanpa
+ * perlu memuat ulang halaman.
+ */
+try {
+  window.addEventListener('mykasir:fresh', (e) => {
+    const { action, value } = e?.detail || {};
+    if (action !== 'getSettings') return;
+    if (!value || typeof value !== 'object' || value.ok === false || !('storeName' in value)) return;
+    cache = { ...FALLBACK, ...value };
+    listeners.forEach((fn) => {
+      try { fn(cache); } catch { /* ignore */ }
+    });
+  });
+} catch { /* di luar peramban */ }
 
 /** Pengaturan saat ini (sinkron). */
 export function settings() {
