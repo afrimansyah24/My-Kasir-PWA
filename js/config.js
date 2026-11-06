@@ -9,7 +9,7 @@
  * Perhatikan: URL harus berakhiran /exec (bukan /dev).
  */
 
-export const GAS_URL = '';
+export const GAS_URL = 'https://script.google.com/macros/s/AKfycbxGGOG-qsWzG1Wl2fDUuKCjFv5evCORQmty7fN3qLImmJjiqP4H6XWqDHib7aIyq0iu7w/exec';
 
 /** Token opsional untuk backend Apps Script. Kosongkan bila tidak dipakai. */
 export const GAS_TOKEN = '';
