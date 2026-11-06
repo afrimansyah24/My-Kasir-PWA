@@ -49,7 +49,7 @@ export function settings() {
 export async function refreshSettings() {
   try {
     const s = await api.getSettings();
-    if (s && !s.error && typeof s === 'object') {
+    if (s && typeof s === 'object' && s.ok !== false && 'storeName' in s) {
       cache = { ...FALLBACK, ...s };
       listeners.forEach((fn) => {
         try { fn(cache); } catch { /* ignore */ }

@@ -388,6 +388,21 @@ export async function resetDemoData() {
   return { ok: true };
 }
 
+/**
+ * Transaksi POS luring (mode lokal).
+ *
+ * Mode lokal sudah menangani pencatatan di cart.checkoutOffline(), tapi fungsi
+ * ini tetap disediakan agar bentuk API kedua mode benar-benar sama.
+ */
+export async function saveTransaction(payload) {
+  await lag(120);
+  const items = (payload.items || []).filter((it) => it.qty > 0);
+  if (!items.length) return { ok: false, error: 'Keranjang masih kosong' };
+
+  const tx = store.addTransaction({ ...payload, items });
+  return { ok: true, transaction: tx };
+}
+
 /** Snapshot seluruh database (dipakai untuk cadangan/restore). */
 export async function exportDatabase() {
   return store.exportDatabase();

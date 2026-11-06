@@ -6,13 +6,14 @@
  *   map tiles    -> network first with cache fallback
  */
 
-const VERSION = 'mykasir-v1.3.0';
+const VERSION = 'mykasir-v1.4.1';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
 const PRECACHE = [
   './',
   './index.html',
+  './404.html',
   './manifest.webmanifest',
 
   './css/core.css',

@@ -8,6 +8,7 @@
 import { h, icon, toast, emptyState } from '../util.js';
 import * as api from '../api.js';
 import { settings } from '../settings.js';
+import { withBase } from '../app.js';
 
 export function mountQueueScreen(view) {
   const host = h('div.queue-screen');
@@ -31,7 +32,7 @@ export function mountQueueScreen(view) {
           toast(soundOn ? 'Suara pengumuman aktif' : 'Suara dimatikan', 'info', 1500);
         },
       }, icon('sound')),
-      h('a.btn.btn--ghost', { href: '/' }, icon('store'), 'Toko')
+      h('a.btn.btn--ghost', { href: withBase('/') }, icon('store'), 'Toko')
     )
   );
 

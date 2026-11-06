@@ -15,7 +15,7 @@ import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
 import * as cart from '../cart.js';
 import { areaChart, barChart, hBarChart, donutChart, sparkline, legend, ringChart, heatMap } from '../charts.js';
-import { go, toggleTheme, currentTheme } from '../app.js';
+import { go, withBase, toggleTheme, currentTheme } from '../app.js';
 import { mountQueueScreen } from './queue.js';
 
 const ROLE_KEY = 'mykasir.role';
@@ -163,7 +163,7 @@ function portalShell(active = '') {
     nav.innerHTML = '';
     nav.append(
       h('div.rail-nav__brand', null,
-        h('a.brand', { href: '/' },
+        h('a.brand', { href: withBase('/') },
           h('span.brand__mark', null, icon('store')),
           h('span', null, 'My Kasir')
         )
@@ -190,8 +190,8 @@ function portalShell(active = '') {
 
     nav.append(
       h('div.rail-nav__foot', null,
-        h('a.rail-nav__item', { href: '/', onclick: () => go('/') }, icon('store'), 'Lihat toko'),
-        h('a.rail-nav__item', { href: '/antrean' }, icon('monitor'), 'Layar antrean'),
+        h('a.rail-nav__item', { href: withBase('/'), onclick: () => go('/') }, icon('store'), 'Lihat toko'),
+        h('a.rail-nav__item', { href: withBase('/antrean') }, icon('monitor'), 'Layar antrean'),
         h('button.rail-nav__item', {
           onclick: () => {
             const next = toggleTheme();
@@ -850,7 +850,7 @@ async function queueView() {
                 e.status !== 'ready' ? h('button.btn.btn--sm.btn--mint', {
                   onclick: async () => { await api.setQueueEntryStatus(e.number, 'ready'); refresh(); },
                 }, 'Siap') : null,
-                h('a.btn.btn--sm.btn--ghost', { href: '/antrean', target: '_blank' }, icon('monitor'))
+                h('a.btn.btn--sm.btn--ghost', { href: withBase('/antrean'), target: '_blank' }, icon('monitor'))
               )
             )
           )
@@ -1717,7 +1717,7 @@ async function settingsView() {
               }, icon('copy'), 'Salin data (JSON)'),
 
               h('button.btn.btn--soft', {
-                onclick: () => {
+                onclick: async () => {
                   const blob = new Blob([await api.exportDatabase()], { type: 'application/json' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
