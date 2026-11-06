@@ -470,6 +470,23 @@ function boot() {
     refreshSettings();
   });
 
+  // Prefetch SELURUH data portal dalam satu eksekusi Apps Script.
+  //
+  // Tanpa ini, tiap menu portal (dashboard, produk, transaksi, antrean,
+  // pengaturan) menembak server sendiri — 2-4 detik per menu, dan itulah
+  // sebab "server lambat merespons" muncul. Setelah prefetch, semua menu
+  // dilayani dari cache L2 secara instan.
+  //
+  // Dijalankan di latar belakang: etalase tetap tampil tanpa menunggu.
+  const prefetch = () => {
+    if (document.hidden) return;
+    api.prefetchPortal?.().catch(() => { /* ignore */ });
+  };
+  setTimeout(prefetch, 400);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) prefetch();
+  });
+
   registerSW();
   setupInstallPrompt();
   setupOfflineBar();

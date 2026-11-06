@@ -21,9 +21,16 @@ import { qrCanvas } from '../qr.js';
 import { GAS_URL, readOverride, writeOverride } from '../config.js';
 import { mountQueueScreen } from './queue.js';
 
-const ROLE_KEY = 'mykasir.role';
-
-let session = null; // { role, name }
+/**
+ * Sesi portal HANYA hidup di memori tab.
+ *
+ * Sengaja TIDAK disimpan ke localStorage: setiap kali portal dibuka, pengguna
+ * harus memasukkan PIN 6 digit lagi. Ini menjaga keamanan akun owner &
+ * kasir — membuka "Lihat toko" lalu kembali ke portal selalu meminta PIN.
+ *
+ * Menutup/memuat ulang tab otomatis mengakhiri sesi.
+ */
+let session = null; // { role, name, username, id }
 
 export function getSession() {
   return session;
@@ -41,16 +48,12 @@ export function mountPortal(view, params = []) {
     return;
   }
 
-  // Pulihkan sesi agar kembali ke toko / back / refresh TIDAK logout.
-  // (localStorage, bukan sessionStorage — sesi tetap hidup di tab mana pun
-  //  sampai pengguna menekan "Keluar" secara sadar.)
-  if (!session) {
-    try {
-      const saved = JSON.parse(localStorage.getItem(ROLE_KEY) || 'null')
-        || JSON.parse(sessionStorage.getItem(ROLE_KEY) || 'null');   // migrasi sesi lama
-      if (saved && saved.role) session = saved;
-    } catch { /* ignore */ }
-  }
+  // Setiap kali portal dibuka, PIN 6 digit diminta lagi.
+  //
+  // Sesi sengaja tidak dipulihkan dari localStorage/sessionStorage:
+  // kembali ke toko lalu klik "Portal" harus meminta PIN, bukan masuk
+  // otomatis. Sesi hanya hidup selama tab ini terbuka.
+  session = null;
 
   if (!session) {
     view.append(loginGate());
@@ -234,7 +237,6 @@ function loginGate() {
         return;
       }
       session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id };
-      try { localStorage.setItem(ROLE_KEY, JSON.stringify(session)); } catch { /* ignore */ }
       const app = document.getElementById('app');
       app.innerHTML = '';
       app.append(portalShell(''));
@@ -366,8 +368,9 @@ function portalShell(active = '') {
               confirmLabel: 'Keluar',
             });
             session = null;
-            try { localStorage.removeItem(ROLE_KEY); } catch { /* ignore */ }
-            try { sessionStorage.removeItem(ROLE_KEY); } catch { /* ignore lama */ }
+            // Bersihkan sisa sesi lama (versi sebelum sesi di-memory-only).
+            try { localStorage.removeItem('mykasir.role'); } catch { /* ignore */ }
+            try { sessionStorage.removeItem('mykasir.role'); } catch { /* ignore */ }
             go('/');
           },
         }, icon('logout'), 'Keluar')
@@ -399,7 +402,11 @@ function portalShell(active = '') {
     body.append(loadingRow);
 
     // Failsafe: jangan pernah membiarkan layar "Memuat…" menggantung.
-    // Bila server lambat/gagal, tampilkan tombol coba lagi setelah 12 detik.
+    //
+    // Batasnya 30 detik, bukan 12: satu eksekusi Apps Script bisa memakan
+    // 2-4 detik, dan beberapa permintaan berbaris bisa menambah itu. Batas
+    // 12 detik membuat pesan "server lambat merespons" muncul padahal
+    // server sebenarnya sedang bekerja.
     let settled = false;
     const failsafe = setTimeout(() => {
       if (settled) return;
@@ -419,7 +426,7 @@ function portalShell(active = '') {
           }, 'Bersihkan cache')
         )
       );
-    }, 12_000);
+    }, 30_000);
 
     Promise.resolve(viewFactory[current]?.())
       .then((node) => {
@@ -1218,7 +1225,14 @@ async function ordersView() {
     if (pollTimer) return;
     pollTimer = setInterval(() => {
       if (document.hidden) return;
-      api.bustCache();           // paksa data segar dari Spreadsheet
+      // JANGAN bustCache() di sini.
+      //
+      // bustCache() membuang seluruh cache L1+L2 dan memaksa semua baca
+      // berikutnya menembak server. Dipanggil tiap 12 detik, itu membuat
+      // aplikasi "memuat terus" dan membebani Apps Script.
+      //
+      // `refresh()` sudah cukup: entri cache yang basi direvalidasi di
+      // latar belakang, jadi data tetap real time tanpa membuang cache.
       refresh();
     }, 12000);
   };
@@ -2035,10 +2049,26 @@ async function settingsView() {
     updateSaveState();
   };
 
-  /** Ubah nilai draf hanya bila benar-benar berbeda dari nilai tersimpan. */
+  /**
+   * Ubah nilai draf hanya bila benar-benar berbeda dari nilai tersimpan.
+   *
+   * Perbandingan dilakukan pada bentuk yang sudah dinormalisasi (angka ->
+   * number, teks -> string trimmed). Tanpa ini, nilai yang berubah tipe
+   * (mis. "−6.12" dari server menjadi -6.12 dari peta) dianggap sama dan
+   * perubahan tidak pernah masuk draf -> tersimpan tetap nilai lama.
+   */
+  const normalizeValue = (v) => {
+    if (typeof v === 'number') return v;
+    if (v === null || v === undefined || v === '') return '';
+    const num = Number(v);
+    if (Number.isFinite(num) && String(v).trim() !== '') return num;
+    return String(v).trim();
+  };
+
   const setDraft = (key, value) => {
-    if (String(draft[key] ?? '') === String(value ?? '')) return;
-    draft[key] = value;
+    const next = normalizeValue(value);
+    if (normalizeValue(draft[key]) === next) return;
+    draft[key] = next;
     markDirty(key);
   };
 
@@ -2337,32 +2367,53 @@ async function settingsView() {
       // Tampilkan koordinat yang benar-benar valid (data rusak disamarkan).
       // Baca dari DRAFT supaya perubahan belum disimpan tidak hilang saat
       // tab dipindah.
-      const rawLat = Number(draft.storeLat);
-      const rawLng = Number(draft.storeLng);
-      const okLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90;
-      const okLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180;
-      const latInput = h('input.input', { type: 'number', value: okLat ? rawLat : -6.9147, step: 'any' });
-      const lngInput = h('input.input', { type: 'number', value: okLng ? rawLng : 107.6098, step: 'any' });
-      const radiusInput = h('input.input', { type: 'number', value: draft.deliveryRadiusKm ?? 0, step: '0.1', min: '0' });
+      // Helper: koordinat valid atau null. `|| fallback` TIDAK boleh dipakai
+      // di sini — nilai 0 (bujur nol) adalah koordinat sah dan akan tertimpa
+      // titik awal bila memakai `||`.
+      const readCoord = (raw, limit) => {
+        if (raw === null || raw === undefined || raw === '') return null;
+        const num = Number(raw);
+        if (!Number.isFinite(num)) return null;
+        if (Math.abs(num) > limit) return null;
+        return num;
+      };
+
+      const initLat = readCoord(draft.storeLat, 90);
+      const initLng = readCoord(draft.storeLng, 180);
+      const startLat = initLat ?? -6.9147;
+      const startLng = initLng ?? 107.6098;
+      const initRadius = Number(draft.deliveryRadiusKm);
+      const startRadius = Number.isFinite(initRadius) ? initRadius : 0;
+
+      const latInput = h('input.input', { type: 'number', value: startLat, step: 'any' });
+      const lngInput = h('input.input', { type: 'number', value: startLng, step: 'any' });
+      const radiusInput = h('input.input', { type: 'number', value: startRadius, step: '0.1', min: '0' });
       const coordLabel = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.75' } });
+      coordLabel.textContent = `Titik toko: ${startLat.toFixed(6)}, ${startLng.toFixed(6)}`;
 
       const picker = createPickerMap({
-        lat: Number(draft.storeLat) || -6.9147,
-        lng: Number(draft.storeLng) || 107.6098,
+        lat: startLat,
+        lng: startLng,
         zoom: 15,
-        radiusKm: Number(draft.deliveryRadiusKm) || 0,
+        radiusKm: startRadius,
         height: 400,
         onChange: ({ lat, lng }) => {
           latInput.value = lat.toFixed(6);
           lngInput.value = lng.toFixed(6);
           coordLabel.textContent = `Titik toko: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+          // Langsung masukkan ke draf: pin yang digeser HARUS ikut tersimpan
+          // saat tombol Simpan ditekan. Sebelumnya perubahan ini hanya
+          // mengisi input, sehingga draf tetap berisi koordinat lama.
+          setDraft('storeLat', lat);
+          setDraft('storeLng', lng);
         },
       });
 
       const savePoint = () => {
         const lat = Number(latInput.value);
         const lng = Number(lngInput.value);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)
+          || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
           toast('Koordinat tidak valid', 'err');
           return;
         }
@@ -2380,9 +2431,10 @@ async function settingsView() {
         savePoint();
       });
       radiusInput.addEventListener('change', () => {
-        const km = Number(radiusInput.value) || 0;
-        picker.setRadius(km);
-        setDraft('deliveryRadiusKm', km);
+        const km = Number(radiusInput.value);
+        const safeKm = Number.isFinite(km) ? km : 0;
+        picker.setRadius(safeKm);
+        setDraft('deliveryRadiusKm', safeKm);
       });
 
       host.append(
@@ -2441,6 +2493,135 @@ async function settingsView() {
             h('div.callout.mt-4', null,
               icon('info'),
               'Bila foto QRIS belum diunggah, aplikasi tetap membuat QRIS dinamis dari payload EMV (merchant + nominal + CRC) seperti sebelumnya.'
+            ),
+
+            h('div.divider'),
+
+            /* --- QRIS DINAMIS (gateway) ---------------------------------- */
+            h('div', null,
+              h('h3.t-h3', null, 'QRIS dinamis (gateway)'),
+              h('p.t-body.mt-2.mb-4', null,
+                'QRIS dinamis berarti QR dibuat oleh server acquiring bank, sehingga nominal terkunci di dalam QR ' +
+                'dan status pembayaran otomatis terkirim lewat webhook. Bila gateway aktif, foto QRIS statis di atas ' +
+                'diabaikan dan setiap pesanan mendapat QR dengan nominal yang benar.'
+              ),
+
+              (() => {
+                const mode = String(draft.qrisGateway || 'none');
+                const keyInput = h('input.input', {
+                  type: 'password',
+                  value: draft.qrisApiKey || '',
+                  placeholder: 'API key / secret key',
+                  autocomplete: 'off',
+                });
+                const merchantInput = h('input.input', {
+                  type: 'text',
+                  value: draft.qrisMerchantId || '',
+                  placeholder: 'ID merchant di provider',
+                });
+                const baseInput = h('input.input', {
+                  type: 'text',
+                  value: draft.qrisApiBase || '',
+                  placeholder: 'Kosongkan untuk memakai URL bawaan provider',
+                });
+                const callbackInput = h('input.input', {
+                  type: 'text',
+                  value: draft.qrisCallbackBase || '',
+                  placeholder: 'https://script.google.com/macros/s/.../exec',
+                });
+
+                const modeSelect = h('select.select', {
+                  'aria-label': 'Provider QRIS',
+                  onchange: (e) => {
+                    setDraft('qrisGateway', e.target.value);
+                    render();
+                  },
+                },
+                  h('option', { value: 'none', selected: mode === 'none' }, 'Tidak aktif (QRIS statis)'),
+                  h('option', { value: 'xendit', selected: mode === 'xendit' }, 'Xendit'),
+                  h('option', { value: 'midtrans', selected: mode === 'midtrans' }, 'Midtrans'),
+                  h('option', { value: 'custom', selected: mode === 'custom' }, 'Gateway sendiri (custom)')
+                );
+
+                keyInput.addEventListener('input', () => setDraft('qrisApiKey', keyInput.value));
+                merchantInput.addEventListener('input', () => setDraft('qrisMerchantId', merchantInput.value));
+                baseInput.addEventListener('input', () => setDraft('qrisApiBase', baseInput.value));
+                callbackInput.addEventListener('input', () => setDraft('qrisCallbackBase', callbackInput.value));
+
+                const PROVIDERS = {
+                  xendit: {
+                    title: 'Xendit',
+                    hint: 'Buat secret API key di Xendit Dashboard > Developers > API Keys. ' +
+                      'Aktifkan produk QRIS, lalu pakai Merchant QR Code mode DYNAMIC. ' +
+                      'Webhooks: aktifkan event "QR Code Paid" dan arahkan ke URL callback di bawah.',
+                    defaultBase: 'https://api.xendit.co',
+                  },
+                  midtrans: {
+                    title: 'Midtrans',
+                    hint: 'Buat "Server Key" di Midtrans Dashboard > Settings > Access Keys. ' +
+                      'Aktifkan QRIS pada produk Anda. Webhooks: arahkan ke URL callback di bawah ' +
+                      'dengan event status "PAID".',
+                    defaultBase: 'https://api.midtrans.com/v2',
+                  },
+                  custom: {
+                    title: 'Gateway sendiri',
+                    hint: 'Panggil endpoint milik Anda: POST {base}/create dengan body ' +
+                      '{ external_id, amount, code }. Server harus membalas JSON yang memuat ' +
+                      'qr_string / qr_code / qrCode / data.',
+                    defaultBase: '',
+                  },
+                };
+
+                if (mode === 'none') {
+                  return h('div.callout', null,
+                    icon('info'),
+                    'Gateway belum aktif. Aplikasi memakai QRIS statis: foto QRIS (atau payload EMV) dengan nominal yang ditulis manual oleh kasir.'
+                  );
+                }
+
+                const p = PROVIDERS[mode] || PROVIDERS.custom;
+
+                return h('div', null,
+                  h('div.field', null,
+                    h('label', null, 'Provider'),
+                    modeSelect
+                  ),
+
+                  h('div.field.mt-3', null,
+                    h('label', null, 'API key / secret key'),
+                    keyInput,
+                    h('div.field__hint', null, 'Disimpan di Spreadsheet (Settings). Jangan bagikan.')
+                  ),
+
+                  h('div.field.mt-3', null,
+                    h('label', null, 'ID merchant'),
+                    merchantInput
+                  ),
+
+                  h('div.field.mt-3', null,
+                    h('label', null, 'URL dasar API'),
+                    baseInput,
+                    h('div.field__hint', null, p.defaultBase ? `Kosongkan untuk memakai ${p.defaultBase}` : 'Wajib diisi untuk gateway custom.')
+                  ),
+
+                  h('div.field.mt-3', null,
+                    h('label', null, 'URL callback (webhook)'),
+                    callbackInput,
+                    h('div.field__hint', null,
+                      'URL Web App Apps Script Anda. Backend memanggil ?action=qrisCallback otomatis — ' +
+                      'tidak perlu menambah kode manual.'
+                    )
+                  ),
+
+                  h('div.callout.mt-4', null, icon('info'), p.hint),
+
+                  h('div.callout.mt-3', null,
+                    icon('alert'),
+                    'Pengaturan tersimpan setelah menekan "Simpan perubahan" di bagian atas. ' +
+                    'Satu-satunya hal yang perlu dilakukan di sisi provider adalah mengarahkan webhook ke URL callback.'
+                  )
+                );
+              })()
             )
           )
         )

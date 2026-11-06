@@ -40,8 +40,8 @@ const TIMEOUT = 30000;
    WRITE: langsung, lalu cache dibuang.
    ========================================================================== */
 
-const READ_TTL = 15_000;   // dianggap basi setelah 15 detik
-const LONG_TTL = 60_000;   // data yang jarang berubah (produk, kategori, settings)
+const READ_TTL = 60_000;   // dianggap basi setelah 1 menit
+const LONG_TTL = 5 * 60_000;   // data yang jarang berubah (produk, kategori, settings)
 
 const TTL_BY_ACTION = {
   getSettings: LONG_TTL,
@@ -53,6 +53,11 @@ const TTL_BY_ACTION = {
   // Etalase jarang berubah; tanpa ini setiap kunjungan memicu eksekusi
   // Apps Script tiap 15 detik — itulah sebab "Memuat…" lama.
   getPublicCatalogData: LONG_TTL,
+  // Antrean & pesanan online berubah cepat (kasir menandai status).
+  // TTL pendek supaya data benar-benar real time, dan revalidasi berjalan
+  // di latar belakang tanpa pernah menahan layar.
+  getQueue: 20_000,
+  getOnlineOrders: 20_000,
 };
 
 const cache = new Map();     // key -> { value, fetchedAt, revalidating }
@@ -82,6 +87,9 @@ const PERSIST_ACTIONS = new Set([
   // tetap ditampilkan dulu, lalu diperbarui di latar belakang (SWR).
   'getDashboardData',
   'getTransactions',
+  'getQueue',
+  'getOnlineOrders',
+  'getUsers',
 ]);
 
 /** Umur maksimum data persisten yang masih boleh ditampilkan (ms). */
@@ -92,6 +100,11 @@ const PERSIST_MAX_AGE = {
   getPublicCatalogData: 12 * 60 * 60_000,
   getCategories: 12 * 60 * 60_000,
   getProducts: 12 * 60 * 60_000,
+  // Antrean & pesanan: 2 menit. Cukup untuk tampil instan, tapi tetap
+  // direvalidasi supaya kasir melihat perubahan status dalam hitungan detik.
+  getQueue: 2 * 60_000,
+  getOnlineOrders: 2 * 60_000,
+  getUsers: 12 * 60 * 60_000,
 };
 
 /** Batas ukuran agar localStorage tidak meledak (base64 gambar produk). */
@@ -570,6 +583,115 @@ function bundleValue(bundle, req) {
     default:
       return value;
   }
+}
+
+/* ==========================================================================
+   Prefetch
+   --------------------------------------------------------------------------
+   Prefetch seluruh data portal dalam SATU eksekusi Apps Script.
+   ========================================================================== */
+
+/**
+ * Ambil seluruh data portal sekaligus, lalu simpan ke cache L2.
+ *
+ * Setiap layar portal membuka permintaan sendiri, dan satu eksekusi Apps
+ * Script memakan 2-4 detik. Dengan prefetch, semua data diambil sekali saat
+ * aplikasi dibuka (di latar belakang), lalu setiap layar berikutnya dilayani
+ * dari cache L2 secara INSTAN — tanpa menunggu server.
+ *
+ * Aman dipanggil berkali-kali: permintaan identik yang sedang berjalan
+ * digabung oleh `safe()`, dan hasilnya hanya ditulis sekali.
+ */
+let prefetchPromise = null;
+
+/** Aksi yang di-prefetch — cermin dari bagian bundle backend. */
+const PREFETCH_ACTIONS = [
+  'getSettings', 'getPublicCatalogData', 'getDashboardData',
+  'getProducts', 'getCategories', 'getTransactions',
+  'getQueue', 'getOnlineOrders', 'getUsers',
+];
+
+export function prefetchPortal() {
+  if (prefetchPromise) return prefetchPromise;
+
+  // Satu eksekusi Apps Script untuk SEMUA data portal.
+  //
+  // Backend menyediakan aksi `getPortalBundle` yang menggabungkan pembacaan
+  // sheet menjadi satu permintaan. Memakai 9 permintaan terpisah (walau
+  // paralel) berarti 9 eksekusi Apps Script — berat, dan sering berbaris
+  // di antrean server sehingga justru lebih lambat.
+  const parts = [
+    'settings', 'catalog', 'dashboard', 'products',
+    'categories', 'transactions', 'queue', 'orders', 'users',
+  ];
+
+  const action = 'getPortalBundle';
+  const payload = { parts: parts.join(',') };
+  const key = cacheKey(action, payload);
+
+  // Kalau datanya sudah ada & segar, tidak perlu menyentuh server.
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.fetchedAt < (TTL_BY_ACTION[action] || READ_TTL)) {
+    return Promise.resolve(hit.value);
+  }
+
+  // Data per-aksi dari L2 (kunjungan sebelumnya) sudah cukup untuk
+  // mengisi layar. Server baru dihubungi bila ada bagian yang benar-benar
+  // perlu disegarkan — revalidasi berjalan di latar belakang, jadi layar
+  // TIDAK pernah menunggu.
+  const missing = [];
+  for (const act of PREFETCH_ACTIONS) {
+    const seeded = seedFromPersist(act, {});
+    if (!seeded) missing.push(act);
+  }
+  if (!missing.length) {
+    // Semua ada di L2 -> tidak perlu bundle sama sekali.
+    prefetchPromise = Promise.resolve(null);
+    return prefetchPromise;
+  }
+
+  prefetchPromise = call(action, payload)
+    .then((res) => {
+      prefetchPromise = null;
+      if (!res || res.ok === false) return null;
+
+      // Sebarkan tiap bagian ke cache aksi masing-masing, supaya
+      // dashboardView / productsView / ordersView dilayani dari cache
+      // tanpa request baru.
+      const MAP = {
+        settings: 'getSettings',
+        catalog: 'getPublicCatalogData',
+        dashboard: 'getDashboardData',
+        products: 'getProducts',
+        categories: 'getCategories',
+        transactions: 'getTransactions',
+        queue: 'getQueue',
+        orders: 'getOnlineOrders',
+        users: 'getUsers',
+      };
+      for (const [part, act] of Object.entries(MAP)) {
+        const value = res[part];
+        if (value === undefined) continue;
+        // cacheKey harus memakai payload yang SAMA dengan saat aksi dipanggil.
+        // `getPublicCatalogData()` dll. dipanggil tanpa payload -> kunci = nama
+        // aksi. Bila kunci tidak sama, cache tidak terbaca dan layar menembak
+        // server lagi.
+        storeResult(act, {}, cacheKey(act, {}), value);
+        // Pastikan juga tersedia di L1 & L2 dengan kunci kanonik.
+        const canonicalKey = cacheKey(act, {});
+        cache.set(canonicalKey, { value, fetchedAt: Date.now(), revalidating: false });
+        persistWrite(act, {}, value);
+      }
+
+      cache.set(key, { value: res, fetchedAt: Date.now(), revalidating: false });
+      return res;
+    })
+    .catch(() => {
+      prefetchPromise = null;
+      return null;
+    });
+
+  return prefetchPromise;
 }
 
 /* ==========================================================================

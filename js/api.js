@@ -59,4 +59,10 @@ export const pingServer = gas.pingServer;
 /** Buang cache baca (paksa data segar dari server). */
 export const bustCache = gas.bustCache;
 
+/**
+ * Ambil seluruh data portal sekaligus (satu eksekusi Apps Script) lalu
+ * simpan ke cache — layar berikutnya tampil tanpa menunggu server.
+ */
+export const prefetchPortal = gas.prefetchPortal;
+
 export { uid } from './util.js';

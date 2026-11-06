@@ -1146,11 +1146,30 @@ function openCheckout() {
       step3.innerHTML = '';
 
       if (payment === 'QRIS') {
-        // Foto QRIS toko (unggahan owner) → diprioritaskan; kalau belum ada,
-        // pakai QRIS dinamis dari payload EMV (nominal otomatis).
+        // Urutan sumber QR:
+        //   1. QRIS DINAMIS dari gateway — payload dibuat acquiring bank,
+        //      nominal terkunci, status bayar masuk lewat webhook.
+        //   2. Foto QRIS statis (unggahan owner) — nominal ditulis manual.
+        //   3. Payload EMV buatan sendiri (merchant + nominal + CRC).
+        const dynamicQris = order.qrisDynamic === '1' && order.qrisPayload;
         const staticQris = data.store.qrisImage;
         const holder = h('div.qris__code');
-        if (staticQris) {
+
+        if (dynamicQris) {
+          // Gateway bisa mengembalikan payload EMV atau URL gambar/QR.
+          const raw = String(order.qrisPayload);
+          if (/^https?:\/\//i.test(raw)) {
+            holder.append(
+              h('img', {
+                src: raw,
+                alt: 'QRIS dinamis',
+                style: { width: '208px', maxWidth: '100%', borderRadius: 'var(--r-md)' },
+              })
+            );
+          } else {
+            holder.append(qrCanvas(raw, { size: 208 }));
+          }
+        } else if (staticQris) {
           holder.append(
             h('img', {
               src: staticQris,
@@ -1190,9 +1209,11 @@ function openCheckout() {
             h('div', null,
               h('div.t-h3', null, 'Bayar dengan QRIS'),
               h('p.t-body.mt-2', null,
-                staticQris
-                  ? 'Pindai kode QRIS toko dengan aplikasi e-wallet, lalu masukkan nominal sesuai jumlah di atas.'
-                  : 'Nominal sudah terisi otomatis. Buka aplikasi e-wallet Anda dan pindai kode di samping.'
+                dynamicQris
+                  ? 'Nominal sudah terkunci di dalam QR. Buka aplikasi e-wallet Anda dan pindai kode di samping.'
+                  : staticQris
+                    ? 'Pindai kode QRIS toko dengan aplikasi e-wallet, lalu masukkan nominal sesuai jumlah di atas.'
+                    : 'Nominal sudah terisi otomatis. Buka aplikasi e-wallet Anda dan pindai kode di samping.'
               ),
               h('div.callout.mt-3', null, icon('clock'), timerLabel),
               h('button.btn.btn--soft.btn--block.mt-3', {

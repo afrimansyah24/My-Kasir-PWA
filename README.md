@@ -72,6 +72,18 @@ my-kasir-pwa/
 
 Di **Portal → Pengaturan** Anda dapat mengubah nama toko, istilah (bukan hardcoded F&B), koordinat peta (Leaflet/OSM), template QRIS, dan PIN portal. QRIS checkout membangun payload EMV TLV + **CRC16-CCITT** di klien (`js/qr.js`).
 
+### QRIS dinamis
+
+Backend dapat meminta QR ke acquiring bank (Xendit, Midtrans, atau gateway
+sendiri) sehingga **nominal terkunci di dalam QR** dan status pembayaran masuk
+otomatis lewat webhook. Bila gateway tidak aktif, aplikasi jatuh ke QRIS
+statis. Panduan lengkap: **`TUTORIAL-QRIS-DINAMIS.md`**.
+
+## Keamanan portal
+
+Sesi portal hanya hidup di memori tab: **setiap kali `/portal` dibuka, PIN 6
+digit diminta lagi**, dan me-refresh/menutup tab mengakhiri sesi.
+
 ## Screenshot
 
 Pratinjau lengkap ada di folder `docs/screenshots/` (01–17): etalase, keranjang, checkout, antrean, portal PIN, dashboard, POS, dan modul admin.
