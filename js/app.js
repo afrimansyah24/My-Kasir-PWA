@@ -3,6 +3,7 @@
 import { $, h, icon, toast, esc, clamp, rupiah } from './util.js';
 import * as api from './api.js';
 import * as store from './store.js';
+import { refreshSettings } from './settings.js';
 import { loadCart, subscribe as subscribeCart } from './cart.js';
 import { mountStorefront } from './views/storefront.js';
 import { mountPortal } from './views/portal.js';
@@ -214,6 +215,10 @@ function boot() {
 
   app.root = document.getElementById('app');
   route();
+
+  // Pengaturan dipakai sinkron oleh keranjang/struk/antrean — ambil sekali
+  // di awal, lalu segarkan lagi setelah hydration selesai.
+  refreshSettings();
 
   registerSW();
   setupInstallPrompt();

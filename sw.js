@@ -6,7 +6,7 @@
  *   map tiles    -> network first with cache fallback
  */
 
-const VERSION = 'mykasir-v1.2.0';
+const VERSION = 'mykasir-v1.3.0';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
@@ -22,7 +22,11 @@ const PRECACHE = [
 
   './js/util.js',
   './js/store.js',
+  './js/config.js',
+  './js/settings.js',
   './js/api.js',
+  './js/api.local.js',
+  './js/api.gas.js',
   './js/charts.js',
   './js/qr.js',
   './js/cart.js',

@@ -12,7 +12,7 @@ import {
   fileToDataUrl, numberShort,
 } from '../util.js';
 import * as api from '../api.js';
-import * as store from '../store.js';
+import { settings, refreshSettings } from '../settings.js';
 import * as cart from '../cart.js';
 import { areaChart, barChart, hBarChart, donutChart, sparkline, legend, ringChart, heatMap } from '../charts.js';
 import { go, toggleTheme, currentTheme } from '../app.js';
@@ -586,9 +586,9 @@ async function posView() {
       );
     });
 
-    const finish = (method, customer) => {
+    const finish = async (method, customer) => {
       try {
-        const { receipt } = cart.checkoutOffline({
+        const { receipt } = await cart.checkoutOffline({
           payment: method,
           cashier: session?.name || 'Kasir',
           customer,
@@ -1546,6 +1546,7 @@ async function settingsView() {
     const input = h('input', { type: 'checkbox', checked: !!s[key] });
     input.addEventListener('change', async () => {
       await api.saveSettings({ [key]: input.checked });
+      refreshSettings();
       toast('Pengaturan disimpan', 'ok', 1400);
     });
     return h('div.row-between', { style: { padding: '12px 0', borderBottom: '1px solid var(--line-2)' } },
@@ -1561,6 +1562,7 @@ async function settingsView() {
     const input = h('input.input', { type, value: s[key] ?? '' });
     input.addEventListener('change', async () => {
       await api.saveSettings({ [key]: type === 'number' ? Number(input.value) || 0 : input.value });
+      refreshSettings();
       toast('Disimpan', 'ok', 1400);
     });
     return h('div.field', null,
@@ -1708,7 +1710,7 @@ async function settingsView() {
 
               h('button.btn.btn--soft', {
                 onclick: async () => {
-                  const json = store.exportDatabase();
+                  const json = await api.exportDatabase();
                   const ok = await copyText(json);
                   toast(ok ? 'Data disalin ke clipboard' : 'Gagal menyalin', ok ? 'ok' : 'err');
                 },
@@ -1716,7 +1718,7 @@ async function settingsView() {
 
               h('button.btn.btn--soft', {
                 onclick: () => {
-                  const blob = new Blob([store.exportDatabase()], { type: 'application/json' });
+                  const blob = new Blob([await api.exportDatabase()], { type: 'application/json' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
@@ -1734,7 +1736,8 @@ async function settingsView() {
                     if (!file) return;
                     try {
                       const text = await file.text();
-                      store.importDatabase(text);
+                      const res = await api.importDatabase(text);
+                      if (!res.ok) throw new Error(res.error || 'Gagal memulihkan data');
                       toast('Data berhasil dipulihkan', 'ok');
                       setTimeout(() => location.reload(), 700);
                     } catch (err) {
@@ -1801,7 +1804,7 @@ function mountMap() {
   if (!holder || holder.dataset.ready) return;
   holder.dataset.ready = '1';
 
-  const s = store.settings();
+  const s = settings();
   const lat = Number(s.storeLat) || -6.9147;
   const lng = Number(s.storeLng) || 107.6098;
 
@@ -1831,13 +1834,13 @@ function mountMap() {
 
     marker.on('dragend', () => {
       const pos = marker.getLatLng();
-      api.saveSettings({ storeLat: pos.lat, storeLng: pos.lng });
+      api.saveSettings({ storeLat: pos.lat, storeLng: pos.lng }).then(refreshSettings);
       toast('Lokasi toko diperbarui', 'ok', 1800);
     });
 
     map.on('click', (e) => {
       marker.setLatLng(e.latlng);
-      api.saveSettings({ storeLat: e.latlng.lat, storeLng: e.latlng.lng });
+      api.saveSettings({ storeLat: e.latlng.lat, storeLng: e.latlng.lng }).then(refreshSettings);
       toast('Lokasi toko diperbarui', 'ok', 1800);
     });
   };

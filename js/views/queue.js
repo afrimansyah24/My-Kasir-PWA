@@ -7,17 +7,17 @@
 
 import { h, icon, toast, emptyState } from '../util.js';
 import * as api from '../api.js';
-import * as store from '../store.js';
+import { settings } from '../settings.js';
 
 export function mountQueueScreen(view) {
   const host = h('div.queue-screen');
-  const settings = store.settings();
+  const s = settings();
   let soundOn = true;
 
   const head = h('div.queue-screen__head', null,
     h('div', null,
       h('div.t-eyebrow.t-cobalt', null, h('span.dot.dot--live'), 'Layar antrean'),
-      h('h1.queue-screen__title.mt-2', null, settings.storeName || 'Antrean'),
+      h('h1.queue-screen__title.mt-2', null, s.storeName || 'Antrean'),
       h('div.t-body.mt-2', null, 'Nomor pesanan yang siap diambil akan tampil di layar ini.')
     ),
     h('div.row.gap-2', null,

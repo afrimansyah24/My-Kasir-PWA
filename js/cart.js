@@ -5,6 +5,8 @@
  */
 
 import * as store from './store.js';
+import * as api from './api.js';
+import { settings } from './settings.js';
 import { orderCode } from './util.js';
 
 const CART_KEY = 'mykasir.cart.v1';
@@ -121,13 +123,13 @@ export function subtotal() {
 }
 
 export function discountAmount() {
-  const max = store.settings().maxDiscountPercent || 0;
+  const max = settings().maxDiscountPercent || 0;
   const cap = (subtotal() * max) / 100;
   return Math.min(state.discount || 0, cap);
 }
 
 export function deliveryFee() {
-  const s = store.settings();
+  const s = settings();
   return state.fulfilment === 'delivery' && s.featureDelivery ? Number(s.deliveryFee) || 0 : 0;
 }
 
@@ -143,17 +145,9 @@ export function total() {
  * Complete a POS sale. Deducts stock, records the transaction and returns a
  * receipt-shaped object the caller can print.
  */
-export function checkoutOffline({ payment, cashier, customer, table, fulfilment, discount = 0 }) {
-  const s = store.settings();
+export async function checkoutOffline({ payment, cashier, customer, table, fulfilment, discount = 0 }) {
+  const s = settings();
   const items = state.items.map((i) => ({ ...i, total: i.price * i.qty }));
-
-  for (const it of items) {
-    const p = store.product(it.id);
-    if (!p) throw new Error(`Produk "${it.name}" tidak ditemukan`);
-    if (p.trackStock && p.stock < it.qty) {
-      throw new Error(`Stok ${it.name} tersisa ${p.stock} ${p.unit}`);
-    }
-  }
 
   const sub = items.reduce((acc, i) => acc + i.total, 0);
   const disc = Math.min(Number(discount) || 0, sub);
@@ -161,8 +155,7 @@ export function checkoutOffline({ payment, cashier, customer, table, fulfilment,
   const grand = Math.max(0, sub - disc + fee);
 
   const code = orderCode();
-  const tx = store.addTransaction({
-    ts: new Date().toISOString(),
+  const payload = {
     code,
     items,
     subtotal: sub,
@@ -176,7 +169,26 @@ export function checkoutOffline({ payment, cashier, customer, table, fulfilment,
     table: table || '',
     fulfilment: fulfilment || 'pickup',
     status: 'paid',
-  });
+  };
+
+  // Mode GAS: validasi stok & pencatatan terjadi di server.
+  if (api.mode === 'gas') {
+    const res = await api.saveTransaction(payload);
+    if (!res.ok) throw new Error(res.error || 'Gagal menyimpan transaksi');
+    const tx = res.transaction;
+    return { tx, receipt: buildReceipt(tx) };
+  }
+
+  // Mode lokal: validasi & potong stok di perangkat.
+  for (const it of items) {
+    const p = store.product(it.id);
+    if (!p) throw new Error(`Produk "${it.name}" tidak ditemukan`);
+    if (p.trackStock && p.stock < it.qty) {
+      throw new Error(`Stok ${it.name} tersisa ${p.stock} ${p.unit}`);
+    }
+  }
+
+  const tx = store.addTransaction(payload);
 
   for (const it of items) {
     const p = store.product(it.id);
@@ -191,7 +203,7 @@ export function checkoutOffline({ payment, cashier, customer, table, fulfilment,
    ---------------------------------------------------------------------- */
 
 export function buildReceipt(tx) {
-  const s = store.settings();
+  const s = settings();
   return {
     header: s.receiptHeader || s.storeName,
     footer: s.receiptFooter,
