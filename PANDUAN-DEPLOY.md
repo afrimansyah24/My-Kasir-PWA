@@ -109,6 +109,45 @@ Implementasi GAS harus mengembalikan JSON dengan **nama fungsi & bentuk respons*
 
 Tab yang disiapkan (sesuai demo): Settings, Categories, Products, Users, Transactions, OnlineOrders, Queue.
 
+### 2.4 Mode server: mengaktifkan & mempercepat
+
+**Aktifkan server.** Ada dua cara (yang kedua lebih mudah):
+
+| Cara | Langkah |
+|------|---------|
+| Edit berkas | `js/config.js` → isi `GAS_URL` dengan URL Web App (`…/exec`) |
+| Lewat UI | **Portal → Pengaturan → Data → "Hubungkan Google Spreadsheet"** → tempel URL → **Simpan & hubungkan** |
+
+> **Catatan service worker.** `js/config.js` pernah tersaji basi dari cache sehingga
+> aplikasi tetap berjalan di mode demo walau server sudah aktif. Sekarang
+> `config.js` selalu diambil dari jaringan (lihat `sw.js`), dan badge
+> **Server aktif / Mode demo** di Pengaturan → Data menunjukkan mode yang
+> benar-benar dipakai.
+
+**Kenapa sebelumnya lambat, dan apa yang berubah:**
+
+| Sebab | Perbaikan |
+|-------|-----------|
+| Setiap permintaan = 1 eksekusi Apps Script (2–3 detik) | Permintaan yang muncul bersamaan digabung jadi **satu** aksi `getPortalBundle` |
+| Dashboard membaca sheet `Transactions` 5× | Cache baca di server (TTL 5 detik) + bundle |
+| Cache lama "menunggu" 20 detik tanpa pembaruan | **Stale-while-revalidate**: data lama langsung tampil, diperbarui di belakang layar |
+| `cancelExpiredOnlineOrders` tiap 60 detik | Setiap 5 menit, dan hanya saat tab terlihat |
+
+**Langkah wajib setelah memperbarui backend:** `gas/Code.gs` versi baru menambah
+aksi `getPortalBundle` + cache..apps Script harus **di-deploy ulang**:
+
+```
+Apps Script → Deploy → Manage deployments → ikon pensil (Edit) →
+Version: New version → Deploy
+```
+
+Tanpa deploy ulang, aplikasi tetap jalan (otomatis fallback ke permintaan
+biasa), hanya belum mendapat kecepatan penuh.
+
+**Data tetap real time.** Halaman **Pesanan Online** melakukan polling tiap 12
+detik (berhenti saat tab disembunyikan) sehingga pesanan baru dari pelanggan
+langsung terlihat.
+
 ---
 
 ## 3. Instalasi langkah demi langkah (tanpa Cloudflare)

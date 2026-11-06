@@ -454,3 +454,12 @@ export async function importDatabase(json) {
 }
 
 export { uid };
+
+/** Mode lokal tidak punya server — koneksi "berhasil" ke diri sendiri. */
+export async function pingServer() {
+  await lag(30);
+  return { ok: true, service: 'My Kasir API (local)', mode: 'local' };
+}
+
+/** Mode lokal: data sudah ada di perangkat, tidak ada cache server. */
+export function bustCache() {}

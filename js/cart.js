@@ -123,7 +123,12 @@ export function setDestination(lat, lng) {
 export function destinationKm() {
   if (state.destLat === null || state.destLng === null) return null;
   const s = settings();
-  const km = haversineKm(Number(s.storeLat), Number(s.storeLng), state.destLat, state.destLng);
+  const sLat = Number(s.storeLat);
+  const sLng = Number(s.storeLng);
+  // Koordinat toko bisa rusak di Settings -> pakai titik tengah Indonesia.
+  const lat = Number.isFinite(sLat) && sLat >= -90 && sLat <= 90 ? sLat : -6.9147;
+  const lng = Number.isFinite(sLng) && sLng >= -180 && sLng <= 180 ? sLng : 107.6098;
+  const km = haversineKm(lat, lng, state.destLat, state.destLng);
   return Number.isFinite(km) ? km : null;
 }
 

@@ -52,6 +52,23 @@ export function loadLeaflet() {
 }
 
 /**
+ * Koordinat valid?
+ *
+ * Sheet bisa berisi nilai rusak (mis. kolom koordinat terisi nomor lain
+ * karena salah simpan, atau angka desimal yang terpotong). Leaflet akan
+ * melempar error saat menerima koordinat di luar rentang bumi, jadi nilai
+ * such dibuang lebih dulu.
+ */
+export function isValidLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return false;
+  if (la < -90 || la > 90) return false;
+  if (ln < -180 || ln > 180) return false;
+  return true;
+}
+
+/**
  * Peta pilihan titik.
  *
  * @param {object} opts
@@ -74,6 +91,10 @@ export function createPickerMap(opts = {}) {
     onChange = null,
   } = opts;
 
+  // Koordinat tak sah -> pakai titik tengah Indonesia (Bandung).
+  const safeLat = isValidLatLng(lat, lng) ? Number(lat) : -6.9147;
+  const safeLng = isValidLatLng(lat, lng) ? Number(lng) : 107.6098;
+
   const el = h('div.map-picker', {
     style: { height: `${height}px`, position: 'relative', borderRadius: 'var(--r-lg)', overflow: 'hidden', border: '1px solid var(--line)' },
   });
@@ -84,7 +105,7 @@ export function createPickerMap(opts = {}) {
   let map = null;
   let marker = null;
   let circle = null;
-  let current = { lat: Number(lat), lng: Number(lng) };
+  let current = { lat: safeLat, lng: safeLng };
 
   const report = () => {
     if (onChange) onChange({ ...current });

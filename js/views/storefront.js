@@ -589,8 +589,11 @@ function openCheckout() {
     const mountDeliveryMap = () => {
       const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
       const perKm = Number(data.store.deliveryPerKm) || 0;
-      const storeLat = Number(data.store.lat) || -6.9147;
-      const storeLng = Number(data.store.lng) || 107.6098;
+      // Koordinat dari server bisa tidak valid -> jaga agar peta tidak crash.
+      const rawLat = Number(data.store.lat);
+      const rawLng = Number(data.store.lng);
+      const storeLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90 ? rawLat : -6.9147;
+      const storeLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180 ? rawLng : 107.6098;
 
       const info = () => {
         const km = cart.destinationKm();
@@ -1164,7 +1167,7 @@ function footer(data) {
    Mount
    ---------------------------------------------------------------------- */
 
-export function mountStorefront(view, { track = false, params = [] } = {}) {
+export function mountStorefront(view, { track = false, params = [], initialData = null } = {}) {
   const host = h('div.app');
   const bootPanel = h('div.gate', null,
     h('div.gate__card', null,
@@ -1194,7 +1197,10 @@ export function mountStorefront(view, { track = false, params = [] } = {}) {
   const boot = async () => {
     let data;
     try {
-      data = await api.getPublicCatalogData();
+      // Data yang sudah di-fetch saat boot dipakai langsung (hemat 1
+      // permintaan ke server); kalau belum ada, ambil sendiri.
+      const preset = initialData ? await initialData : null;
+      data = preset || (await api.getPublicCatalogData());
     } catch (err) {
       showCatalogError(err.message || 'Gagal menghubungi server.');
       return;

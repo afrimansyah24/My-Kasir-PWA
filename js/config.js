@@ -2,7 +2,7 @@
  * My Kasir — konfigurasi runtime (frontend / PWA).
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │  HANYA isi GAS_URL di file ini. Spreadsheet TIDAK di sini.              │
+ * │  Isi GAS_URL di sini, ATAU lewat UI: Portal → Pengaturan → Data.      │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * Mode demo (tanpa server):
@@ -26,16 +26,53 @@
  *
  *        https://script.google.com/macros/s/AKfycb…/exec
  *
- *      Tempel URL itu ke GAS_URL di bawah.
+ *      Tempel URL itu ke GAS_URL di bawah (atau tempel di UI Pengaturan → Data).
  *
  * Kesalahan umum: menempel URL spreadsheet (`docs.google.com/spreadsheets/…`)
  * ke GAS_URL — aplikasi akan menunggu server yang tidak pernah menjawab.
  */
 
-export const GAS_URL = 'https://script.google.com/macros/s/AKfycbxGGOG-qsWzG1Wl2fDUuKCjFv5evCORQmty7fN3qLImmJjiqP4H6XWqDHib7aIyq0iu7w/exec';
+/** Kunci localStorage untuk override dari UI. */
+const OVERRIDE_KEY = 'mykasir.gasUrl';
+
+/**
+ * URL Web App GAS.
+ *
+ * Urutan prioritas:
+ *   1. Override dari UI (Pengaturan → Data) — paling baru, langsung berlaku.
+ *   2. Nilai di bawah (hasil edit file).
+ *
+ * Nilai di bawah sengaja DIISI dengan deployment aktif agar aplikasi langsung
+ * memakai Spreadsheet tanpa perlu edit file lagi.
+ */
+export const GAS_URL =
+  readOverride() ||
+  'https://script.google.com/macros/s/AKfycbxGGOG-qsWzG1Wl2fDUuKCjFv5evCORQmty7fN3qLImmJjiqP4H6XWqDHib7aIyq0iu7w/exec';
 
 /** Token opsional untuk backend Apps Script. Kosongkan bila tidak dipakai. */
 export const GAS_TOKEN = '';
+
+/** Ambil override GAS_URL yang disimpan dari UI (string atau ''). */
+export function readOverride() {
+  try {
+    const raw = localStorage.getItem(OVERRIDE_KEY);
+    return raw === null ? '' : String(raw).trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Simpan override GAS_URL dari UI. Kosongkan string untuk kembali ke default. */
+export function writeOverride(url) {
+  try {
+    const value = String(url || '').trim();
+    if (value) localStorage.setItem(OVERRIDE_KEY, value);
+    else localStorage.removeItem(OVERRIDE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** URL Web App GAS valid untuk mode produksi. */
 export function isGasConfigured() {

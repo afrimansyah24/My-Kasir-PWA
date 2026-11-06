@@ -6,7 +6,7 @@
  *   map tiles    -> network first with cache fallback
  */
 
-const VERSION = 'mykasir-v1.5.0';
+const VERSION = 'mykasir-v1.6.0';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
@@ -129,6 +129,25 @@ self.addEventListener('fetch', (event) => {
 
   // Same-origin static assets: stale-while-revalidate.
   if (sameOrigin) {
+    // config.js TIDAK boleh basi: isinya menentukan mode aplikasi
+    // (demo lokal vs Google Sheets). Satu versi lama → aplikasi salah
+    //_artikan dan tetap jalan di mode demo walaupun server sudah aktif.
+    // Jadi config.js selalu diambil dari jaringan (fallback ke cache).
+    if (url.pathname.endsWith('/js/config.js')) {
+      event.respondWith(
+        fetch(req)
+          .then((res) => {
+            if (res && res.status === 200 && res.type === 'basic') {
+              const copy = res.clone();
+              caches.open(SHELL).then((c) => c.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => caches.match(req))
+      );
+      return;
+    }
+
     event.respondWith(
       caches.match(req).then((cached) => {
         const network = fetch(req)

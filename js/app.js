@@ -28,6 +28,7 @@ const app = {
   root: null,
   params: {},
   current: null,
+  onLeave: null,   // callback view sebelum dilepas (mis. hentikan polling)
 };
 
 /* -------------------------------------------------------------------------
@@ -188,6 +189,12 @@ function route() {
   app.params = params;
   app.current = matched || 'storefront';
 
+  // Beri view sebelumnya kesempatan membersihkan diri (polling, timer).
+  if (typeof app.onLeave === 'function') {
+    try { app.onLeave(); } catch { /* ignore */ }
+    app.onLeave = null;
+  }
+
   // close any open drawer/scrim between navigations
   document.querySelectorAll('.drawer.is-open, .scrim.is-open').forEach((el) => {
     el.classList.remove('is-open');
@@ -256,7 +263,14 @@ function render() {
   } else if (app.current === 'queue') {
     mountQueueScreen(view);
   } else {
-    mountStorefront(view, { track: app.current === 'track', params: app.params });
+    // Katalog yang sudah di-fetch saat boot diteruskan ke storefront,
+    // supaya tidak ada permintaan kedua ke server.
+    const catalog = app.catalogPromise;
+    mountStorefront(view, {
+      track: app.current === 'track',
+      params: app.params,
+      initialData: catalog,
+    });
   }
 
   root.append(view);
@@ -406,11 +420,25 @@ function boot() {
 
   app.root = document.getElementById('app');
   restoreDeepLink();
+
+  // Pengaturan & katalog diambil BERSAMAAN. Di mode GAS permintaan yang
+  // muncul bersamaan digabung jadi satu eksekusi Apps Script — jadi
+  // render pertama hanya butuh 1Network call, bukan 2.
+  const hydration = Promise.all([
+    refreshSettings(),
+    api.getPublicCatalogData().catch(() => null),
+  ]);
+
+  // Simpan katalog hasil boot; dipakai storefront agar tak request 2x.
+  app.catalogPromise = hydration.then(([, catalog]) => catalog || undefined);
+
   route();
 
-  // Pengaturan dipakai sinkron oleh keranjang/struk/antrean — ambil sekali
-  // di awal, lalu segarkan lagi setelah hydration selesai.
-  refreshSettings();
+  hydration.finally(() => {
+    // Segarkan pengaturan di cache supaya struk/keranjang/antrean memakai
+    // nilai terbaru dari server.
+    refreshSettings();
+  });
 
   registerSW();
   setupInstallPrompt();
@@ -425,9 +453,21 @@ function boot() {
     });
   });
 
-  // cancel expired QRIS orders on boot and every minute
-  api.cancelExpiredOnlineOrders();
-  setInterval(() => api.cancelExpiredOnlineOrders(), 60_000);
+  // Cancel expired QRIS orders.
+  //
+  // Di mode GAS setiap panggilan = 1 eksekusi Apps Script (2-3 detik).
+  // Menjalankannya tiap menit entertained adalah pemborosan; cukup setiap
+  // 5 menit, dan hanya saat tab sedang terlihat.
+  let expiredTimer = null;
+  const runExpiry = () => {
+    if (document.hidden) return;
+    api.cancelExpiredOnlineOrders();
+  };
+  runExpiry();
+  expiredTimer = setInterval(runExpiry, 300_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) runExpiry();
+  });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {

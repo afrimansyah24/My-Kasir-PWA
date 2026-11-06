@@ -15,9 +15,10 @@ import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
 import * as cart from '../cart.js';
 import { areaChart, barChart, hBarChart, donutChart, sparkline, legend, ringChart, heatMap } from '../charts.js';
-import { go, withBase, toggleTheme, currentTheme } from '../app.js';
+import { go, withBase, toggleTheme, currentTheme, app } from '../app.js';
 import { createPickerMap } from '../map.js';
 import { qrCanvas } from '../qr.js';
+import { GAS_URL, readOverride, writeOverride } from '../config.js';
 import { mountQueueScreen } from './queue.js';
 
 const ROLE_KEY = 'mykasir.role';
@@ -444,7 +445,12 @@ function portalShell(active = '') {
    ========================================================================== */
 
 async function dashboardView() {
-  const data = await api.getDashboardData(14);
+  // Ambil dashboard & transaksi BERSAMAAN — di mode GAS keduanya jadi satu
+  // permintaan (bundle), jadi hanya 1 eksekusi Apps Script.
+  const [data, transactions] = await Promise.all([
+    api.getDashboardData(14),
+    api.getTransactions(),
+  ]);
   const { summary, daily, top, hourly, channels } = data;
 
   const totalRevenue = daily.reduce((s, d) => s + d.total, 0);
@@ -567,7 +573,7 @@ async function dashboardView() {
       h('div.panel', null,
         h('div.panel__head', null, h('h3.t-h3', null, 'Transaksi terbaru')),
         h('div.panel__body.panel__body--flush', null,
-          (await api.getTransactions()).slice(0, 6).map((t) =>
+          transactions.slice(0, 6).map((t) =>
             h('div.list-row', null,
               h('div.avatar', { class: t.channel === 'online' ? 'avatar--violet' : 'avatar--teal' },
                 icon(t.channel === 'online' ? 'qr' : 'cash')),
@@ -1124,6 +1130,38 @@ async function ordersView() {
       render();
     });
     return fresh;
+  };
+
+  // Auto-refresh: pesanan online berubah dari sisi pelanggan. Polling
+  // ringan (12 detik) + berhenti saat tab disembunyikan supaya tidak
+  // membebani Apps Script.
+  let pollTimer = null;
+  const onVisibility = () => {
+    if (document.hidden) {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+    } else {
+      startPolling();
+      refresh();
+    }
+  };
+  const startPolling = () => {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+      if (document.hidden) return;
+      api.bustCache();           // paksa data segar dari Spreadsheet
+      refresh();
+    }, 12000);
+  };
+
+  document.addEventListener('visibilitychange', onVisibility);
+  startPolling();
+
+  // Berhenti polling saat view dilepas (pindah menu).
+  app.onLeave = () => {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    document.removeEventListener('visibilitychange', onVisibility);
   };
 
   const tabBar = h('div.sr-tabs');
@@ -2133,8 +2171,13 @@ async function settingsView() {
         )
       );
     } else if (tab === 'lokasi') {
-      const latInput = h('input.input', { type: 'number', value: s.storeLat ?? '', step: 'any' });
-      const lngInput = h('input.input', { type: 'number', value: s.storeLng ?? '', step: 'any' });
+      // Tampilkan koordinat yang benar-benar valid (data rusak disamarkan).
+      const rawLat = Number(s.storeLat);
+      const rawLng = Number(s.storeLng);
+      const okLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90;
+      const okLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180;
+      const latInput = h('input.input', { type: 'number', value: okLat ? rawLat : -6.9147, step: 'any' });
+      const lngInput = h('input.input', { type: 'number', value: okLng ? rawLng : 107.6098, step: 'any' });
       const radiusInput = h('input.input', { type: 'number', value: s.deliveryRadiusKm ?? 0, step: '0.1', min: '0' });
       const coordLabel = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.75' } });
 
@@ -2257,7 +2300,68 @@ async function settingsView() {
         )
       );
     } else if (tab === 'data') {
+      /* --- Panel hubungkan Spreadsheet -------------------------------- */
+      const gasInput = h('input.input', {
+        type: 'url',
+        placeholder: 'https://script.google.com/macros/s/AKfycb…/exec',
+        value: readOverride() || GAS_URL,
+      });
+
+      const connectBlock = h('div.panel.mb-4', null,
+        h('div.panel__head', null,
+          h('h3.t-h3', null, 'Hubungkan Google Spreadsheet'),
+          h('span', { class: `badge ${api.mode === 'gas' ? 'badge--ok' : 'badge--warn'}` },
+            api.mode === 'gas' ? 'Server aktif' : 'Mode demo')
+        ),
+        h('div.panel__body', null,
+          h('p.t-body.mb-3', null,
+            'Tempel URL Web App Apps Script (Deploy → Manage deployments → URL berakhiran /exec). ' +
+            'URL ini tersimpan di perangkat ini dan langsung dipakai — tanpa perlu edit berkas.'
+          ),
+          gasInput,
+          h('div.row.gap-2.mt-3', null,
+            h('button.btn.btn--primary', {
+              onclick: async () => {
+                const url = gasInput.value.trim();
+                if (!url) {
+                  toast('URL Web App tidak boleh kosong', 'warn');
+                  return;
+                }
+                writeOverride(url);
+                toast('Tersimpan — memuat ulang aplikasi…', 'ok');
+                setTimeout(() => location.reload(), 700);
+              },
+            }, icon('check'), 'Simpan & hubungkan'),
+            h('button.btn.btn--soft', {
+              onclick: async () => {
+                toast('Menguji koneksi…', 'ok', 1200);
+                const res = await api.pingServer();
+                if (res && res.ok) {
+                  toast('Server terhubung', 'ok');
+                } else {
+                  toast(res?.error || 'Server tidak merespons', 'err', 3200);
+                }
+              },
+            }, icon('refresh'), 'Uji koneksi'),
+            readOverride()
+              ? h('button.btn.btn--ghost', {
+                onclick: () => {
+                  writeOverride('');
+                  gasInput.value = GAS_URL;
+                  toast('Kembali ke URL bawaan', 'ok');
+                },
+              }, 'Hapus override')
+              : null
+          ),
+          h('div.field__hint.mt-3', null,
+            'SPREADSHEET_ID diisi di Apps Script → Project Settings → Script properties. ' +
+            'Setelah URL di atas tersimpan, jalankan “setupDatabase()” sekali untuk membuat sheet.'
+          )
+        )
+      );
+
       host.append(
+        connectBlock,
         h('div.panel', null,
           h('div.panel__head', null, h('h3.t-h3', null, 'Database & data')),
           h('div.panel__body', null,
@@ -2271,7 +2375,7 @@ async function settingsView() {
               icon('info'),
               api.mode === 'gas'
                 ? 'Mode server aktif. SPREADSHEET_ID diisi di Apps Script → Script properties. Mengganti ID di sana akan mengganti seluruh database yang dipakai.'
-                : 'Mode demo aktif. Isi GAS_URL di js/config.js untuk beralih ke Google Spreadsheet.'
+                : 'Mode demo aktif — data hanya tersimpan di perangkat ini. Tempel URL Web App di panel “Hubungkan Google Spreadsheet” di atas untuk beralih ke Spreadsheet.'
             ),
 
             h('div.col.gap-3', null,

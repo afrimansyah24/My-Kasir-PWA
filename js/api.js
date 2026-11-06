@@ -58,5 +58,9 @@ export const resetDemoData = impl.resetDemoData;
 export const buildQrisPayload = impl.buildQrisPayload;
 export const exportDatabase = impl.exportDatabase;
 export const importDatabase = impl.importDatabase;
+export const pingServer = impl.pingServer;
+
+/** Buang cache baca (paksa data segar dari server). */
+export const bustCache = impl.bustCache;
 
 export { uid } from './util.js';
