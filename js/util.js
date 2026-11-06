@@ -212,6 +212,17 @@ const ICONS = {
   cash: 'M2 6h20v12H2V6Zm10 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
   qr: 'M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm12 0h3v3h-3v-3Zm4 4h2v3h-2v-3Z',
   pin: 'M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Zm0-8.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z',
+  heart: 'M12 20s-7-4.4-7-9.3A4 4 0 0 1 12 8a4 4 0 0 1 7 2.7C19 15.6 12 20 12 20Z',
+  gift: 'M3 11h18v10H3V11Zm9 0v10M12 7.5C12 7.5 8.5 7 8.5 4.8A2.3 2.3 0 0 1 12 3.6a2.3 2.3 0 0 1 3.5 1.2c0 2.2-3.5 2.7-3.5 2.7ZM3 7h18',
+  medal: 'M12 15a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM9.5 19 12 15l2.5 4M8 3h8l-2.5 4M8 3l2.5 4',
+  bike: 'M5.5 18a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm13 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-13-3h5l3-8h4M9 7h3m3 0h3l1 4',
+  ticket: 'M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8Zm9-2v12',
+  scissors: 'M6 4l12 12M18 4L6 16M6.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm11 0a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z',
+  chef: 'M7 21h10M6 17h12v4H6v-4Zm-1-3a4 4 0 0 1-1-7.9A4 4 0 0 1 12 3a4 4 0 0 1 7 3.1A4 4 0 0 1 18 14H7Z',
+  cup: 'M6 3h12v9a6 6 0 0 1-12 0V3Zm12 2h2a2 2 0 0 1 0 4h-2M5 21h14',
+  shirt: 'M8 3 4 6v15h16V6l-4-3-4 3-4-3Zm4 3v15',
+  shoe: 'M3 16V9h4l3 3h6l5 4v3H3v-3Z',
+  flower: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0-11c1.7 0 3 1.3 3 3s-1.3 2-3 2-2-1.3-2-3 1-2 2-2Zm0 12c1.7 0 3 1.3 3 3s-1.3 2-3 2-2-1.3-2-3 1-2 2-2ZM3 12c0-1.7 1.3-3 3-3s2 1.3 2 3-1.3 2-3 2-2-1.3-2-2Zm12 0c0-1.7 1.3-3 3-3s2 1.3 2 3-1.3 2-3 2-2-1.3-2-2Z',
   truck: 'M3 6h11v10H3V6Zm11 4h4l3 3v3h-7v-6ZM7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm10 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
   store: 'M3 9V8l2-4h14l2 4v1a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1-5 0ZM5 12v8h14v-8M10 20v-5h4v5',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
@@ -264,8 +275,13 @@ const ICONS = {
 };
 
 /** Build an inline SVG icon element. */
+/** Daftar nama ikon yang tersedia (untuk pemilih ikon di pengaturan). */
+export const ICON_NAMES = Object.keys(ICONS);
+
 export function icon(name, cls = 'ico') {
-  const d = ICONS[name];
+  // Nama ikon yang tidak dikenal (mis. 설정 lama) jatuh ke ikon bawaan
+  // supaya tidak muncul kotak kosong.
+  const d = ICONS[name] || ICONS.sparkles;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'none');
@@ -451,6 +467,29 @@ export function fileToDataUrl(file, maxSize = 900) {
 /* -------------------------------------------------------------------------
    Geo & image-storage helpers
    ---------------------------------------------------------------------- */
+
+/**
+ * Normalisasi koordinat geografis.
+ *
+ * Beberapa Spreadsheet legacy menyimpan koordinat tanpa titik desimal,
+ * contoh -7098393 / 112188021 untuk -7.098393 / 112.188021. Angka valid
+ * yang sudah berada dalam rentang bumi tidak pernah diubah.
+ *
+ * @param {'lat'|'lng'|'latitude'|'longitude'} axis
+ * @returns {number|null}
+ */
+export function normalizeCoordinate(value, axis = 'lat') {
+  if (value === null || value === undefined || value === '') return null;
+  const limit = axis === 'lng' || axis === 'longitude' ? 180 : 90;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (Math.abs(n) <= limit) return n;
+  if (Number.isInteger(n)) {
+    const scaled = n / 1_000_000;
+    if (Math.abs(scaled) <= limit) return scaled;
+  }
+  return null;
+}
 
 /** Jarak dua titik GPS dalam km (haversine). */
 export function haversineKm(lat1, lng1, lat2, lng2) {

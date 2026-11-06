@@ -8,7 +8,7 @@
 
 import * as api from './api.js';
 import { settings } from './settings.js';
-import { orderCode, haversineKm, loadImage } from './util.js';
+import { orderCode, haversineKm, loadImage, normalizeCoordinate } from './util.js';
 
 const CART_KEY = 'mykasir.cart.v1';
 
@@ -124,11 +124,11 @@ export function setDestination(lat, lng) {
 export function destinationKm() {
   if (state.destLat === null || state.destLng === null) return null;
   const s = settings();
-  const sLat = Number(s.storeLat);
-  const sLng = Number(s.storeLng);
-  // Koordinat toko bisa rusak di Settings -> pakai titik tengah Indonesia.
-  const lat = Number.isFinite(sLat) && sLat >= -90 && sLat <= 90 ? sLat : -6.9147;
-  const lng = Number.isFinite(sLng) && sLng >= -180 && sLng <= 180 ? sLng : 107.6098;
+  const lat = normalizeCoordinate(s.storeLat, 'lat');
+  const lng = normalizeCoordinate(s.storeLng, 'lng');
+  // Tanpa lokasi toko ongkir/jarak tidak dapat dihitung; jangan diam-diam
+  // menghitung dari Bandung atau titik default lain.
+  if (lat === null || lng === null) return null;
   const km = haversineKm(lat, lng, state.destLat, state.destLng);
   return Number.isFinite(km) ? km : null;
 }

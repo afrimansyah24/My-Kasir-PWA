@@ -2,12 +2,12 @@
  * My Kasir — cache pengaturan.
  *
  * Beberapa bagian UI (keranjang, struk, peta, layar antrean) membutuhkan
- * pengaturan secara sinkron, sementara sumber data bisa async (server GAS
- * atau cache lokal). Modul ini menyimpan salinan terakhir dan memperbarui
+ * pengaturan secara sinkron, sementara sumber data async dari server GAS. Modul ini menyimpan salinan terakhir dan memperbarui
  * dirinya saat boot maupun setelah pengaturan diubah.
  */
 
 import * as api from './api.js';
+import { normalizeCoordinate } from './util.js';
 
 /**
  * Nilai cadangan saat server belum menjawab.
@@ -50,6 +50,19 @@ const FALLBACK = {
   heroImage: '',
   heroShowBadge: 'true',
   heroShowStats: 'true',
+  heroBadgeIcon: '',
+  heroTile1Icon: '',
+  heroTile1Image: '',
+  heroTile1Label: '',
+  heroTile2Icon: '',
+  heroTile2Image: '',
+  heroTile2Label: '',
+  heroTile3Icon: '',
+  heroTile3Image: '',
+  heroTile3Label: '',
+  heroTile4Icon: '',
+  heroTile4Image: '',
+  heroTile4Label: '',
   footerNote: '',
   couriers: '[]',
   portalPin: '',
@@ -62,8 +75,8 @@ const FALLBACK = {
 let cache = { ...FALLBACK };
 const listeners = new Set();
 
-/** snapshot L2 (`mykasir.cache.v1`) — sama seperti js/api.gas.js */
-const PERSIST_KEY = 'mykasir.cache.v1';
+/** snapshot L2 (`mykasir.cache.v2`) — sama seperti js/api.gas.js */
+const PERSIST_KEY = 'mykasir.cache.v2';
 const SETTINGS_MAX_AGE = 10 * 60_000;
 
 function seedFromPersist() {
@@ -75,6 +88,8 @@ function seedFromPersist() {
     if (!hit?.value || typeof hit.value !== 'object' || hit.value.ok === false) return;
     if (Date.now() - (hit.fetchedAt || 0) > SETTINGS_MAX_AGE) return;
     cache = { ...FALLBACK, ...hit.value };
+    cache.storeLat = normalizeCoordinate(hit.value.storeLat, 'lat');
+    cache.storeLng = normalizeCoordinate(hit.value.storeLng, 'lng');
   } catch {
     /* ignore */
   }
@@ -95,6 +110,8 @@ try {
     if (action !== 'getSettings') return;
     if (!value || typeof value !== 'object' || value.ok === false || !('storeName' in value)) return;
     cache = { ...FALLBACK, ...value };
+    cache.storeLat = normalizeCoordinate(value.storeLat, 'lat');
+    cache.storeLng = normalizeCoordinate(value.storeLng, 'lng');
     listeners.forEach((fn) => {
       try { fn(cache); } catch { /* ignore */ }
     });
@@ -112,6 +129,9 @@ export async function refreshSettings() {
     const s = await api.getSettings();
     if (s && typeof s === 'object' && s.ok !== false && 'storeName' in s) {
       cache = { ...FALLBACK, ...s };
+      // Pulihkan koordinat legacy yang tersimpan tanpa titik desimal.
+      cache.storeLat = normalizeCoordinate(s.storeLat, 'lat');
+      cache.storeLng = normalizeCoordinate(s.storeLng, 'lng');
       listeners.forEach((fn) => {
         try { fn(cache); } catch { /* ignore */ }
       });

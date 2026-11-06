@@ -238,6 +238,33 @@
 }
 
 .hero__tile img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Kartu hero yang dikustomisasi owner (ikon / gambar + teks kecil). */
+.hero__tile--custom {
+  gap: 8px;
+  align-content: center;
+  justify-items: center;
+  color: var(--ink-700);
+}
+.hero__tile--custom .ico {
+  width: 42%;
+  height: 42%;
+  stroke-width: 1.6;
+  color: var(--cobalt);
+}
+.hero__tile--custom img { width: 74%; height: 74%; object-fit: contain; }
+.hero__tile-label {
+  display: block;
+  max-width: 100%;
+  padding: 0 4px;
+  font: 700 11px/1.25 var(--font);
+  color: var(--ink-600);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hero__tile--1 { width: 47%; height: 47%; top: 3%; left: 4%; animation-delay: -0.4s; }
 .hero__tile--2 { width: 42%; height: 42%; top: 26%; right: 1%; animation-delay: -2.1s; }
 .hero__tile--3 { width: 38%; height: 38%; bottom: 16%; left: 16%; animation-delay: -3.6s; }
@@ -1740,3 +1767,72 @@
   max-width: 420px;
   box-shadow: var(--sh-2);
 }
+
+/* Marker peta checkout: pin toko merah berlabel TOKO, pin tujuan biru. */
+.my-kasir-map-pin {
+  background: transparent;
+  border: 0;
+}
+.my-kasir-map-pin__dot {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  background: var(--cobalt);
+}
+.my-kasir-map-pin--store .my-kasir-map-pin__dot {
+  width: 24px;
+  height: 24px;
+  background: var(--coral);
+}
+.my-kasir-map-pin__label {
+  position: absolute;
+  left: 26px;
+  top: 2px;
+  padding: 3px 7px;
+  border-radius: var(--r-pill);
+  color: #fff;
+  background: var(--coral);
+  font: 800 9px/1.2 var(--font);
+  letter-spacing: .04em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+
+/* -------------------------------------------------------------------------
+   Pratinjau ikon & kartu hero di pengaturan owner
+   ------------------------------------------------------------------------- */
+.hero-icon-preview {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  color: var(--cobalt);
+}
+.hero-icon-preview .ico { width: 22px; height: 22px; }
+
+.hero-tile-editor {
+  padding: var(--s-4);
+  margin-top: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunk);
+}
+.hero-tile-preview {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  overflow: hidden;
+}
+.hero-tile-preview .ico { width: 32px; height: 32px; color: var(--cobalt); }
+.hero-tile-preview img { width: 100%; height: 100%; object-fit: contain; }

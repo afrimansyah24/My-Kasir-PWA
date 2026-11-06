@@ -75,7 +75,7 @@ const inflight = new Map();   // key -> Promise
    halaman tidak pernah lama tertahan "Memuat…".
    ---------------------------------------------------------------------- */
 
-const PERSIST_KEY = 'mykasir.cache.v1';
+const PERSIST_KEY = 'mykasir.cache.v2';
 
 /** Aksi yang layak disimpan (hasilnya kecil & sering dipakai). */
 const PERSIST_ACTIONS = new Set([

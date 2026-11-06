@@ -7,7 +7,7 @@
 import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, uid, orderCode, modal, closeModal, copyText, emptyState,
-  compressForStorage, resolveImageSrc,
+  compressForStorage, resolveImageSrc, normalizeCoordinate,
 } from '../util.js';
 import * as api from '../api.js';
 import * as cart from '../cart.js';
@@ -175,6 +175,14 @@ function catalogSignature(data) {
       prods, cats,
       st.name, st.tagline, st.logo, st.phone, st.address,
       st.deliveryFee, st.deliveryPerKm, st.deliveryRadiusKm,
+      st.heroTitle, st.heroTitleHighlight, st.heroSubtitle, st.heroBadgeText,
+      st.heroBadgeIcon, st.heroButtonText, st.heroTrackButtonText,
+      st.heroImage, st.heroShowBadge, st.heroShowStats,
+      st.heroTile1Icon, st.heroTile1Image, st.heroTile1Label,
+      st.heroTile2Icon, st.heroTile2Image, st.heroTile2Label,
+      st.heroTile3Icon, st.heroTile3Image, st.heroTile3Label,
+      st.heroTile4Icon, st.heroTile4Image, st.heroTile4Label,
+      st.lat, st.lng,
       f.onlineOrder, f.delivery, f.dineIn, f.customerName,
       f.requireCustomerName, f.allowNegotiable, f.allowDiscount,
     ].join('#');
@@ -354,13 +362,30 @@ function hero(data) {
   // Gambar banner pilihan owner; bila kosong, pakai foto produk (mosaik).
   const banner = (store.heroImage || '').trim();
 
+  /* --------------------------------------------------------------------
+     Empat kartu visual di sisi kanan hero.
+     Owner bisa memilih ikon ATAU gambar untuk tiap kartu. Kartu yang
+     kosong tidak ditampilkan. Bila SEMUA kartu kosong, dipakai foto-foto
+     produk pilihan (perilaku lama).
+     -------------------------------------------------------------------- */
+  const customTiles = [1, 2, 3, 4].map((n) => ({
+    icon: (store[`heroTile${n}Icon`] || '').trim(),
+    image: (store[`heroTile${n}Image`] || '').trim(),
+    label: (store[`heroTile${n}Label`] || '').trim(),
+  }));
+  const filledTiles = customTiles.filter((t2) => t2.icon || t2.image);
+  const badgeIcon = (store.heroBadgeIcon || '').trim();
+
   return h('section.hero', null,
     h('div.shell', null,
       h('div.hero__inner', null,
         h('div', null,
           showBadge
             ? h('div.hero__badge', null,
-                h('span.badge.badge--info', null, icon('sparkles'), 'Baru'),
+                h('span.badge.badge--info', null,
+                  badgeIcon ? icon(badgeIcon) : icon('sparkles'),
+                  'Baru'
+                ),
                 h('span', null, online ? badgeText : DEFAULT_CLOSED)
               )
             : null,
@@ -400,15 +425,24 @@ function hero(data) {
             : null
         ),
 
-        h('div.hero__art', { 'aria-hidden': 'true' },
+        h('div.hero__art', null,
           h('div.hero__glow'),
           banner
             ? h('img.hero__banner', { src: resolveImageSrc(banner), alt: '', loading: 'lazy' })
-            : tiles.slice(0, 4).map((p, i) =>
-                h('div', { class: `hero__tile hero__tile--${i + 1}` },
-                  p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : null
+            : filledTiles.length
+              ? filledTiles.map((t2, i) =>
+                  h('div', { class: `hero__tile hero__tile--${i + 1} hero__tile--custom` },
+                    t2.image
+                      ? h('img', { src: resolveImageSrc(t2.image), alt: '', loading: 'lazy', 'aria-hidden': 'true' })
+                      : icon(t2.icon),
+                    t2.label ? h('span.hero__tile-label', null, t2.label) : null
+                  )
                 )
-              )
+              : tiles.slice(0, 4).map((p, i) =>
+                  h('div', { class: `hero__tile hero__tile--${i + 1}`, 'aria-hidden': 'true' },
+                    p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : null
+                  )
+                )
         )
       )
     )
@@ -889,9 +923,9 @@ function openCheckout() {
     const mapHolder = h('div.mt-2');
     const mapInfo = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.8' } });
     const mapField = h('div.field.mt-3', null,
-      h('label', null, 'Titik lokasi pengiriman'),
+      h('label', null, 'Peta lokasi toko & pengantaran'),
       h('div.t-xs', { style: { marginBottom: '6px', opacity: '0.85' } },
-        'Tap pada peta untuk menandai rumah/tujuan Anda — ongkir dan batas jarak dihitung otomatis.'
+        'Pin TOKO menunjukkan lokasi toko dari pengaturan pemilik. Pin biru adalah titik pengantaran Anda — geser atau ketuk peta untuk memilih alamat.'
       ),
       mapHolder
     );
@@ -935,11 +969,15 @@ function openCheckout() {
     const mountDeliveryMap = () => {
       const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
       const perKm = Number(data.store.deliveryPerKm) || 0;
-      // Koordinat dari server bisa tidak valid -> jaga agar peta tidak crash.
-      const rawLat = Number(data.store.lat);
-      const rawLng = Number(data.store.lng);
-      const storeLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90 ? rawLat : -6.9147;
-      const storeLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180 ? rawLng : 107.6098;
+      // Koordinat dari server bisa berupa nilai legacy tanpa titik desimal.
+      // Normalisasi dahulu; jangan pernah jatuh ke Bandung sebagai lokasi toko.
+      const storeLat = normalizeCoordinate(data.store.lat, 'lat');
+      const storeLng = normalizeCoordinate(data.store.lng, 'lng');
+      if (storeLat === null || storeLng === null) {
+        toast('Lokasi toko belum diatur dengan koordinat yang valid. Silakan hubungi pemilik toko.', 'warn', 4500);
+        mapInfo.textContent = 'Lokasi toko belum diatur dengan benar.';
+        return;
+      }
 
       const info = () => {
         const km = cart.destinationKm();
@@ -953,7 +991,8 @@ function openCheckout() {
       picker = createPickerMap({
         lat: storeLat,
         lng: storeLng,
-        zoom: 13,
+        referencePoint: { lat: storeLat, lng: storeLng, label: data.store.name || 'Lokasi toko' },
+        zoom: 15,
         radiusKm,
         height: 300,
         onChange: ({ lat, lng }) => {
@@ -967,9 +1006,17 @@ function openCheckout() {
       mapHolder.append(picker.el);
       mapHolder.append(mapInfo);
 
-      // Lokasi awal: titik toko (pelanggan menggeser/menapit ke alamatnya).
-      dest = { lat: storeLat, lng: storeLng };
-      cart.setDestination(storeLat, storeLng);
+      // Awali titik tujuan dari koordinat tujuan yang tersimpan di keranjang
+      // bila masih valid; kalau belum ada, pakai lokasi toko sebagai pusat.
+      // Pin TOKO tetap ditampilkan terpisah dan tidak pernah berubah.
+      const saved = cart.cart();
+      const savedLat = normalizeCoordinate(saved.destLat, 'lat');
+      const savedLng = normalizeCoordinate(saved.destLng, 'lng');
+      const hasSavedDestination = savedLat !== null && savedLng !== null;
+      dest = hasSavedDestination
+        ? { lat: savedLat, lng: savedLng }
+        : { lat: storeLat, lng: storeLng };
+      cart.setDestination(dest.lat, dest.lng);
       updateMapInfo();
     };
 

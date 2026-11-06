@@ -10,7 +10,8 @@ import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, initials, modal, confirmDialog, emptyState, copyText,
   fileToDataUrl, numberShort, compressForStorage, haversineKm,
-  driveFileId, resolveImageSrc, JSONP_SAFE_MAX_CHARS,
+  driveFileId, resolveImageSrc, JSONP_SAFE_MAX_CHARS, normalizeCoordinate,
+  ICON_NAMES,
 } from '../util.js';
 import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
@@ -2149,6 +2150,157 @@ async function settingsView() {
    * Spreadsheet setelah tombol "Simpan perubahan" ditekan.
    */
   /**
+   * Editor satu kartu hero (maks. 4 kartu).
+   *
+   * Setiap kartu boleh memakai ikon bawaan ATAU gambar yang diunggah owner.
+   * Bila keduanya kosong, kartu disembunyikan di etalase.
+   */
+  const tileEditor = (n) => {
+    const iconKey = `heroTile${n}Icon`;
+    const imageKey = `heroTile${n}Image`;
+    const labelKey = `heroTile${n}Label`;
+
+    const preview = h('div.hero-tile-preview');
+    const paint = () => {
+      preview.innerHTML = '';
+      const img = draft[imageKey] || '';
+      const ic = draft[iconKey] || '';
+      if (img) {
+        preview.append(h('img', { src: resolveImageSrc(img), alt: '' }));
+      } else if (ic) {
+        preview.append(icon(ic));
+      } else {
+        preview.append(h('span.t-xs', null, 'kosong'));
+      }
+    };
+    paint();
+
+    const iconSelect = h('select.input');
+    iconSelect.append(h('option', { value: '' }, '— tanpa ikon —'));
+    for (const name of ICON_NAMES) iconSelect.append(h('option', { value: name }, name));
+    iconSelect.value = draft[iconKey] || '';
+    iconSelect.addEventListener('change', () => {
+      setDraft(iconKey, iconSelect.value);
+      paint();
+    });
+
+    const labelInput = h('input.input', {
+      type: 'text',
+      value: draft[labelKey] || '',
+      placeholder: 'Teks kecil di bawah ikon (opsional)',
+    });
+    labelInput.addEventListener('input', () => setDraft(labelKey, labelInput.value));
+
+    // Unggah gambar untuk kartu ini.
+    const fileInput = h('input', { type: 'file', accept: 'image/*' });
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      if (!/^image\//.test(file.type)) {
+        toast('Berkas harus berupa gambar', 'err');
+        return;
+      }
+      try {
+        const dataUrl = await compressForStorage(file, { maxSize: 400 });
+        // Gambar besar dikirim ke Google Drive (lihat uploadImageToDrive).
+        if (dataUrl.length > JSONP_SAFE_MAX_CHARS) {
+          const res = await api.uploadImageToDrive(dataUrl, `hero-${n}-${Date.now()}`);
+          if (res && res.ok && res.fileId) {
+            setDraft(imageKey, res.fileId);
+            paint();
+            toast('Gambar kartu disimpan di Google Drive', 'ok', 2200);
+            return;
+          }
+          if (res && res.fileId) {
+            setDraft(imageKey, res.fileId);
+            paint();
+            toast(res.error || 'Bagikan file ini manual di Google Drive', 'err', 7000);
+            return;
+          }
+          toast('Gambar terlalu besar. Gunakan ikon saja.', 'err');
+          return;
+        }
+        setDraft(imageKey, dataUrl);
+        paint();
+      } catch (err) {
+        toast(err.message || 'Gagal mengunggah gambar', 'err');
+      }
+    });
+
+    const removeBtn = h('button.btn.btn--sm.btn--ghost', {
+      type: 'button',
+      onclick: () => {
+        setDraft(iconKey, '');
+        setDraft(imageKey, '');
+        setDraft(labelKey, '');
+        iconSelect.value = '';
+        labelInput.value = '';
+        paint();
+      },
+    }, icon('close'), 'Kosongkan');
+
+    return h('div.hero-tile-editor', null,
+      h('div.row.gap-3', { style: { alignItems: 'flex-start' } },
+        preview,
+        h('div.grow', null,
+          h('div.t-h3', null, `Kartu ${n}`),
+          h('div.row.gap-2.mt-2', { style: { alignItems: 'center' } },
+            h('div.grow', null, iconSelect),
+            h('button.btn.btn--sm.btn--soft', {
+              type: 'button',
+              onclick: () => fileInput.click(),
+            }, icon('upload'), 'Gambar'),
+            removeBtn
+          ),
+          h('div.mt-2', null, labelInput),
+          fileInput
+        )
+      )
+    );
+  };
+
+  /**
+   * Pemilih ikon untuk pengaturan (daftar ikon siap pakai).
+   *
+   * Nilai disimpan sebagai nama ikon (mis. "truck"), bukan gambar, supaya
+   * ringan dan tidak memakan kuota Spreadsheet.
+   */
+  const iconPicker = (key, label, hint) => {
+    const preview = h('div.hero-icon-preview');
+    const select = h('select.input');
+
+    const paint = () => {
+      preview.innerHTML = '';
+      const current = draft[key] || '';
+      if (current) preview.append(icon(current));
+      else preview.append(h('span.t-xs', null, 'tanpa ikon'));
+    };
+
+    const blank = h('option', { value: '' }, '— tanpa ikon —');
+    select.append(blank);
+    for (const name of ICON_NAMES) {
+      select.append(h('option', { value: name }, name));
+    }
+    select.value = draft[key] || '';
+    select.addEventListener('change', () => {
+      setDraft(key, select.value);
+      paint();
+    });
+
+    paint();
+
+    return h('div.field', null,
+      h('label', null, label),
+      h('div.row.gap-2', { style: { alignItems: 'center' } },
+        preview,
+        h('div.grow', null, select)
+      ),
+      hint ? h('div.field__hint', null, hint) : null
+    );
+  };
+
+  /**
    * Baris pengaturan gambar.
    *
    * Tiga cara supplying gambar:
@@ -2459,13 +2611,7 @@ async function settingsView() {
       // Helper: koordinat valid atau null. `|| fallback` TIDAK boleh dipakai
       // di sini — nilai 0 (bujur nol) adalah koordinat sah dan akan tertimpa
       // titik awal bila memakai `||`.
-      const readCoord = (raw, limit) => {
-        if (raw === null || raw === undefined || raw === '') return null;
-        const num = Number(raw);
-        if (!Number.isFinite(num)) return null;
-        if (Math.abs(num) > limit) return null;
-        return num;
-      };
+      const readCoord = (raw, limit) => normalizeCoordinate(raw, limit === 180 ? 'lng' : 'lat');
 
       const initLat = readCoord(draft.storeLat, 90);
       const initLng = readCoord(draft.storeLng, 180);
@@ -2676,6 +2822,29 @@ async function settingsView() {
                 trackInput
               )
             ),
+
+            h('div.divider'),
+
+            h('h4.t-h3', null, 'Ikon pada badge'),
+            h('p.t-body.mt-2.mb-4', null,
+              'Ikon kecil di sebelah teks "Baru" di atas judul. Pilih ikon yang cocok dengan toko Anda.'
+            ),
+
+            iconPicker('heroBadgeIcon', 'Ikon badge', 'Kosongkan bila tidak ingin memakai ikon.'),
+
+            h('div.divider'),
+
+            h('h4.t-h3', null, 'Empat kartu di samping judul'),
+            h('p.t-body.mt-2.mb-4', null,
+              'Empat kartu berikon (atau bergambar) di sisi kanan bagian atas toko online. ' +
+              'Setiap kartu bisa memakai ikon bawaan, gambar Anda sendiri, atau dikosongkan. ' +
+              'Bila semua kartu kosong, aplikasi memakai foto-foto produk pilihan sebagai pengganti.'
+            ),
+
+            tileEditor(1),
+            tileEditor(2),
+            tileEditor(3),
+            tileEditor(4),
 
             h('div.divider'),
 

@@ -395,7 +395,7 @@ export function toggleTheme() {
  * Dipakai agar refresh halaman tidak kembali ke layar "Memuat…" kosong.
  */
 function readCatalogSeed() {
-  const PERSIST_KEY = 'mykasir.cache.v1';
+  const PERSIST_KEY = 'mykasir.cache.v2';
   const MAX_AGE = 12 * 60 * 60_000;
   try {
     const raw = localStorage.getItem(PERSIST_KEY);

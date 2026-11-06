@@ -84,6 +84,7 @@ export function createPickerMap(opts = {}) {
   const {
     lat = null,
     lng = null,
+    referencePoint = null,
     zoom = 14,
     radiusKm = 0,
     height = 340,
@@ -113,6 +114,7 @@ export function createPickerMap(opts = {}) {
 
   let map = null;
   let marker = null;
+  let referenceMarker = null;
   let circle = null;
   let current = { lat: safeLat, lng: safeLng };
 
@@ -147,10 +149,60 @@ export function createPickerMap(opts = {}) {
       }).addTo(map);
     }
 
+    // Reference point is the fixed shop marker; the main marker is the
+    // draggable customer delivery point. Give them distinct icons so the
+    // customer can always tell which pin is the shop and which one to move.
+    if (referencePoint && isValidLatLng(referencePoint.lat, referencePoint.lng)) {
+      const shopIcon = L.divIcon({
+        className: 'mykasir-map-pin mykasir-map-pin--store',
+        html: '<span class="mykasir-map-pin__dot"></span><span class="mykasir-map-pin__label">TOKO</span>',
+        iconSize: [58, 30],
+        iconAnchor: [14, 15],
+      });
+      referenceMarker = L.marker([Number(referencePoint.lat), Number(referencePoint.lng)], {
+        icon: shopIcon,
+        draggable: false,
+        keyboard: false,
+        title: referencePoint.label || 'Lokasi toko',
+        zIndexOffset: 500,
+      }).addTo(map);
+      if (referencePoint.label && referenceMarker.bindTooltip) {
+        referenceMarker.bindTooltip(referencePoint.label, { direction: 'top', offset: [0, -8] });
+      }
+    }
+
+    const destinationIcon = referencePoint
+      ? L.divIcon({
+          className: 'mykasir-map-pin mykasir-map-pin--destination',
+          html: '<span class="mykasir-map-pin__dot"></span>',
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        })
+      : undefined;
+
     marker = L.marker([current.lat, current.lng], {
+      icon: destinationIcon,
       draggable: allowDrag,
       autoPan: true,
+      title: referencePoint ? 'Lokasi pengantaran Anda' : 'Lokasi yang dipilih',
     }).addTo(map);
+
+    // Mulai tepat di lokasi toko dari Spreadsheet. Jika kedua pin berimpit
+    // saat pertama dibuka, gunakan zoom dekat agar toko & area sekitar terlihat;
+    // setelah pelanggan memindahkan pin, tampilan mengikuti titik terdekat.
+    if (referencePoint && isValidLatLng(referencePoint.lat, referencePoint.lng)) {
+      const shop = { lat: Number(referencePoint.lat), lng: Number(referencePoint.lng) };
+      const gapKm = haversineKm(shop.lat, shop.lng, current.lat, current.lng);
+      if (Number.isFinite(gapKm) && gapKm < 0.05) {
+        map.setView([shop.lat, shop.lng], Math.max(zoom, 15));
+      } else if (map.fitBounds) {
+        const bounds = L.latLngBounds(
+          [shop.lat, shop.lng],
+          [current.lat, current.lng]
+        );
+        map.fitBounds(bounds.pad(0.35), { maxZoom: zoom });
+      }
+    }
 
     marker.on('dragend', () => {
       const p = marker.getLatLng();
