@@ -291,8 +291,8 @@ export async function deleteTransactionRecord(id) {
   return safe('deleteTransactionRecord', { id });
 }
 
-export async function setOrderStatus(code, status) {
-  return safe('setOrderStatus', { code, status });
+export async function setOrderStatus(code, status, extra = {}) {
+  return safe('setOrderStatus', { code, status, ...extra });
 }
 
 export async function setQueueEntryStatus(number, status) {

@@ -9,36 +9,46 @@
     /* Deep-link fallback untuk GitHub Pages (SPA).
      *
      * GitHub Pages menjawab 404 untuk halaman seperti /My-Kasir-PWA/portal
-     * karena file-nya memang tidak ada. Halaman ini mengarahkan pengunjung
-     * ke /My-Kasir-PWA/?/portal — path yang memang ada — lalu app.js membaca
-     * path itu dari query dan merender tampilan yang sesuai.
+     * karena file-nya tidak ada. Halaman ini mengarahkan pengunjung ke
+     * /My-Kasir-PWA/?/portal — path yang ada — lalu app.js membaca path itu
+     * dari query (sessionStorage) dan merender layar yang sesuai.
      *
      * Konvensi: https://github.com/rafgraph/spa-github-pages
+     *
+     * Penting: JANGAN pernah menghasilkan URL identik dengan yang sekarang
+     * (menyebabkan reload loop), dan buang trailing slash lebih dulu agar
+     * sisa path (rest) tidak dianggap kosong.
      */
     (function () {
       var l = window.location;
+
+      // Buang garis miring ganda & trailing slash -> '/My-Kasir-PWA/portal'
+      var path = (l.pathname || '/').replace(/\/{2,}/g, '/');
+      if (path.length > 1) path = path.replace(/\/+$/, '');
+      if (!path) path = '/';
 
       // Di *.github.io aplikasi berada di folder repo (satu segmen),
       // di domain sendiri aplikasi berada di root.
       var isGithubPages = /\.github\.io$/i.test(l.hostname);
       var segmentKeep = isGithubPages ? 1 : 0;
 
-      var parts = l.pathname.split('/');
-      var base = parts.slice(0, 1 + segmentKeep).join('/');
-      var rest = parts.slice(1 + segmentKeep).join('/');
+      var segments = path.split('/');            // ['', 'My-Kasir-PWA', 'portal']
+      var base = segments.slice(0, 1 + segmentKeep).join('/');
+      var rest = segments.slice(1 + segmentKeep).join('/');
 
-      // Kalau path-nya sudah root, tidak ada yang perlu dipulihkan.
-      if (!rest) {
-        l.replace(l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') + base + '/');
-        return;
-      }
+      // Tidak ada sisa path -> ini bukan deep-link yang bisa dipulihkan
+      // (mis. path sudah sama dengan root repo). Jangan redirect apa pun
+      // agar tidak terjadi loop reload 404.
+      if (!rest) return;
 
       var target = l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
         base + '/?/' + rest.replace(/&/g, '~and~') +
         (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
         l.hash;
 
-      // location.href (bukan replace) — lebih andal di semua browser.
+      var same = l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') + path;
+      if (target === same || target === same + '/') return;   // jaga-jaga
+
       l.href = target;
     }());
   </script>

@@ -7,7 +7,7 @@
 import * as store from './store.js';
 import * as api from './api.js';
 import { settings } from './settings.js';
-import { orderCode } from './util.js';
+import { orderCode, haversineKm, loadImage } from './util.js';
 
 const CART_KEY = 'mykasir.cart.v1';
 
@@ -19,6 +19,8 @@ const state = {
   customer: '',
   phone: '',
   address: '',
+  destLat: null,   // titik tujuan delivery (dipilih pelanggan di peta)
+  destLng: null,
 };
 
 const listeners = new Set();
@@ -98,12 +100,31 @@ export function clearCart() {
   state.customer = '';
   state.phone = '';
   state.address = '';
+  state.destLat = null;
+  state.destLng = null;
   emit();
 }
 
 export function setFulfilment(mode) {
   state.fulfilment = mode === 'delivery' ? 'delivery' : 'pickup';
   emit();
+}
+
+/** Simpan titik tujuan pengiriman (hasil pilih di peta). */
+export function setDestination(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  state.destLat = Number.isFinite(la) ? la : null;
+  state.destLng = Number.isFinite(ln) ? ln : null;
+  emit();
+}
+
+/** Jarak (km) dari toko ke titik tujuan — null bila belum dipilih. */
+export function destinationKm() {
+  if (state.destLat === null || state.destLng === null) return null;
+  const s = settings();
+  const km = haversineKm(Number(s.storeLat), Number(s.storeLng), state.destLat, state.destLng);
+  return Number.isFinite(km) ? km : null;
 }
 
 export function setDiscount(value) {
@@ -130,7 +151,16 @@ export function discountAmount() {
 
 export function deliveryFee() {
   const s = settings();
-  return state.fulfilment === 'delivery' && s.featureDelivery ? Number(s.deliveryFee) || 0 : 0;
+  if (state.fulfilment !== 'delivery' || !s.featureDelivery) return 0;
+
+  // Tarif per km (bila diatur owner) + lokasi sudah dipilih → hitung otomatis.
+  const perKm = Number(s.deliveryPerKm) || 0;
+  if (perKm > 0) {
+    const km = destinationKm();
+    if (km !== null && km > 0) return Math.ceil(perKm * km);
+    return 0; // lokasi belum dipilih — ongkir tampil setelah titik dipilih
+  }
+  return Number(s.deliveryFee) || 0;
 }
 
 export function total() {
@@ -206,6 +236,8 @@ export function buildReceipt(tx) {
   const s = settings();
   return {
     header: s.receiptHeader || s.storeName,
+    storeName: s.storeName,
+    logo: s.storeLogo || '',
     footer: s.receiptFooter,
     address: s.storeAddress,
     phone: s.storePhone,
@@ -224,113 +256,222 @@ export function buildReceipt(tx) {
   };
 }
 
-/** Draw a receipt onto a canvas for printing / sharing. */
-export function receiptCanvas(receipt, opts = {}) {
+/**
+ * Struk profesional (asli 58mm): logo toko → kop toko → info kasir/waktu →
+ * tabel item → rincian biaya → TOTAL → metode bayar → footer.
+ *
+ * Gambar logo dimuat lebih dulu supaya bisa digambar; bila logo tidak ada
+ * atau gagal dimuat, kop tetap rapi tanpa logo.
+ */
+export async function receiptCanvas(receipt, opts = {}) {
   const { width = 340, scale = 2 } = opts;
-  const pad = 18;
-  const lineH = 20;
-  const itemRows = receipt.items.length;
-  const height = 300 + itemRows * 34 + 140;
+  const pad = 20;
+  const bodyW = width - pad * 2;
+  const itemRows = Math.max(1, receipt.items.length);
+
+  // --- tinggi dulu (semua posisi vertikal dihitung) ---
+  const headerH = receipt.logo ? 150 : 108;
+  const rowsH = itemRows * 34;
+  const totalsH = 130;
+  const footH = 96;
+  const height = headerH + rowsH + totalsH + footH;
 
   const cv = document.createElement('canvas');
   cv.width = width * scale;
   cv.height = height * scale;
   const ctx = cv.getContext('2d');
   ctx.scale(scale, scale);
+
+  // latar
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = '#10162b';
-  ctx.textAlign = 'center';
-  ctx.font = '700 17px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillText(receipt.header, width / 2, 34);
-  ctx.font = '400 10.5px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillStyle = '#5a6480';
-  ctx.fillText(receipt.address, width / 2, 52);
-  ctx.fillText(receipt.phone, width / 2, 66);
+  const FONT = '"Plus Jakarta Sans", system-ui, sans-serif';
+  const MONO = '"JetBrains Mono", ui-monospace, monospace';
+  const INK = '#10162b';
+  const MUTED = '#5a6480';
+  const FAINT = '#8b93a7';
+  const LINE = '#d8dcea';
 
-  ctx.textAlign = 'left';
-  let y = 92;
-  ctx.strokeStyle = '#d8dcea';
-  ctx.setLineDash([3, 3]);
+  let y = pad;
+
+  // --- logo ---
+  let logo = null;
+  if (receipt.logo) {
+    try {
+      logo = await loadImage(receipt.logo);
+    } catch {
+      logo = null;
+    }
+  }
+  if (logo) {
+    const size = 52;
+    const aspect = logo.width / logo.height || 1;
+    const w = aspect >= 1 ? size : size * aspect;
+    const hh = aspect >= 1 ? size / aspect : size;
+    ctx.drawImage(logo, (width - w) / 2, y, w, hh);
+    y += Math.max(size, hh) + 12;
+  }
+
+  // --- kop toko ---
+  ctx.textAlign = 'center';
+  ctx.fillStyle = INK;
+  ctx.font = `700 17px ${FONT}`;
+  ctx.fillText(receipt.header || receipt.storeName || 'Struk', width / 2, y + 14);
+  y += 22;
+  ctx.fillStyle = MUTED;
+  ctx.font = `400 10.5px ${FONT}`;
+  if (receipt.address) {
+    wrapText(ctx, receipt.address, width / 2, y, bodyW, 13);
+    y += 13 * (1 + extraLines(ctx, receipt.address, bodyW));
+  }
+  if (receipt.phone) {
+    ctx.fillText(receipt.phone, width / 2, y + 6);
+    y += 16;
+  }
+
+  y += 6;
+  // garis titik-titik ala struk thermal
+  ctx.strokeStyle = LINE;
+  ctx.setLineDash([3, 4]);
   ctx.beginPath();
   ctx.moveTo(pad, y);
   ctx.lineTo(width - pad, y);
   ctx.stroke();
   ctx.setLineDash([]);
+  y += 16;
 
+  // --- meta kasir / waktu / no. nota ---
+  ctx.font = `500 10.5px ${FONT}`;
+  ctx.fillStyle = MUTED;
+  const rows = [
+    ['No. nota', receipt.code || '—'],
+    ['Waktu', new Date(receipt.ts).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })],
+    ['Kasir', receipt.cashier || '—'],
+  ];
+  if (receipt.customer) rows.push(['Pelanggan', receipt.customer]);
+  rows.forEach(([k, v]) => {
+    ctx.textAlign = 'left';
+    ctx.fillText(k, pad, y);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = INK;
+    ctx.font = `500 10.5px ${FONT}`;
+    ctx.fillText(truncate(v, 26), width - pad, y);
+    ctx.fillStyle = MUTED;
+    y += 15;
+  });
+
+  y += 4;
+  ctx.strokeStyle = LINE;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  ctx.moveTo(pad, y);
+  ctx.lineTo(width - pad, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
   y += 18;
-  ctx.font = '500 10.5px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillStyle = '#5a6480';
-  ctx.fillText(new Date(receipt.ts).toLocaleString('id-ID'), pad, y);
-  ctx.textAlign = 'right';
-  ctx.fillText(receipt.code, width - pad, y);
 
-  y += 22;
+  // --- header tabel item ---
+  ctx.font = `600 9.5px ${FONT}`;
+  ctx.fillStyle = FAINT;
+  ctx.textAlign = 'left';
+  ctx.fillText('ITEM', pad, y);
+  ctx.textAlign = 'right';
+  ctx.fillText('JUMLAH', width - pad, y);
+  y += 8;
+  ctx.strokeStyle = LINE;
+  ctx.beginPath();
+  ctx.moveTo(pad, y);
+  ctx.lineTo(width - pad, y);
+  ctx.stroke();
+  y += 16;
+
+  // --- item ---
   receipt.items.forEach((it) => {
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#10162b';
-    ctx.font = '500 11.5px "Plus Jakarta Sans", system-ui, sans-serif';
-    ctx.fillText(truncate(it.name, 26), pad, y);
+    ctx.fillStyle = INK;
+    ctx.font = `500 11.5px ${FONT}`;
+    ctx.fillText(truncate(it.name, 24), pad, y);
     ctx.textAlign = 'right';
-    ctx.font = '400 11px "JetBrains Mono", monospace';
-    ctx.fillText(`${it.qty} × ${fmtShort(it.price)}`, width - pad, y);
+    ctx.font = `500 11.5px ${MONO}`;
+    ctx.fillText(fmtShort(it.total ?? it.price * it.qty), width - pad, y);
     y += 15;
+
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#7b849c';
-    ctx.font = '400 10.5px "JetBrains Mono", monospace';
-    ctx.fillText(fmtShort(it.total), pad, y);
-    y += 22;
+    ctx.fillStyle = FAINT;
+    ctx.font = `400 10px ${MONO}`;
+    ctx.fillText(`${it.qty} × ${fmtShort(it.price)}`, pad, y);
+    y += 19;
   });
 
-  y += 4;
-  ctx.strokeStyle = '#d8dcea';
-  ctx.setLineDash([3, 3]);
+  y += 2;
+  ctx.strokeStyle = LINE;
+  ctx.setLineDash([3, 4]);
   ctx.beginPath();
   ctx.moveTo(pad, y);
   ctx.lineTo(width - pad, y);
   ctx.stroke();
   ctx.setLineDash([]);
+  y += 18;
 
-  y += 20;
-  ctx.font = '400 11px "Plus Jakarta Sans", system-ui, sans-serif';
-  const rows = [
-    ['Subtotal', fmtShort(receipt.subtotal)],
-  ];
-  if (receipt.discount > 0) rows.push(['Diskon', `-${fmtShort(receipt.discount)}`]);
-  if (receipt.deliveryFee > 0) rows.push(['Ongkir', fmtShort(receipt.deliveryFee)]);
-  rows.forEach(([label, value]) => {
-    ctx.fillStyle = '#5a6480';
+  // --- rincian ---
+  ctx.font = `400 11px ${FONT}`;
+  const sumRows = [['Subtotal', fmtShort(receipt.subtotal)]];
+  if (receipt.discount > 0) sumRows.push(['Diskon', `-${fmtShort(receipt.discount)}`]);
+  if (receipt.deliveryFee > 0) sumRows.push(['Ongkir', fmtShort(receipt.deliveryFee)]);
+  sumRows.forEach(([label, value]) => {
+    ctx.fillStyle = MUTED;
     ctx.textAlign = 'left';
     ctx.fillText(label, pad, y);
-    ctx.fillStyle = '#10162b';
+    ctx.fillStyle = INK;
     ctx.textAlign = 'right';
     ctx.fillText(value, width - pad, y);
-    y += 17;
+    y += 16;
   });
 
-  y += 4;
-  ctx.fillStyle = '#10162b';
-  ctx.font = '700 14px "Plus Jakarta Sans", system-ui, sans-serif';
+  // --- TOTAL ---
+  y += 6;
+  ctx.fillStyle = INK;
+  ctx.font = `700 15px ${FONT}`;
   ctx.textAlign = 'left';
   ctx.fillText('TOTAL', pad, y);
   ctx.textAlign = 'right';
   ctx.fillText(fmtShort(receipt.total), width - pad, y);
-  y += 18;
-  ctx.font = '400 11px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillStyle = '#5a6480';
-  ctx.textAlign = 'left';
-  ctx.fillText(receipt.payment, pad, y);
-  ctx.textAlign = 'right';
-  ctx.fillText(receipt.cashier, width - pad, y);
+  y += 20;
 
-  y += 30;
+  ctx.font = `400 10.5px ${FONT}`;
+  ctx.fillStyle = MUTED;
+  ctx.textAlign = 'left';
+  ctx.fillText(receipt.payment || '', pad, y);
+  ctx.textAlign = 'right';
+  ctx.fillText(receipt.cashier || '', width - pad, y);
+  y += 24;
+
+  // --- footer ---
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#7b849c';
-  ctx.font = '400 10.5px "Plus Jakarta Sans", system-ui, sans-serif';
-  wrapText(ctx, receipt.footer, width / 2, y, width - pad * 2, 14);
+  ctx.fillStyle = FAINT;
+  ctx.font = `400 10.5px ${FONT}`;
+  wrapText(ctx, receipt.footer || 'Terima kasih atas kunjungan Anda.', width / 2, y, bodyW, 14);
+  y += 14 * (1 + extraLines(ctx, receipt.footer || 'Terima kasih atas kunjungan Anda.', bodyW));
+  y += 8;
+  ctx.font = `600 9.5px ${FONT}`;
+  ctx.fillText('— Nota ini adalah bukti pembayaran yang sah —', width / 2, y);
 
   return cv;
+}
+
+function extraLines(ctx, text, maxW) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  let line = '';
+  let n = 0;
+  for (const w of words) {
+    const t = line ? `${line} ${w}` : w;
+    if (ctx.measureText(t).width > maxW && line) {
+      n += 1;
+      line = w;
+    } else line = t;
+  }
+  return n;
 }
 
 function wrapText(ctx, text, x, y, maxW, lh) {

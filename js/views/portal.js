@@ -9,13 +9,15 @@
 import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, initials, modal, confirmDialog, emptyState, copyText,
-  fileToDataUrl, numberShort,
+  fileToDataUrl, numberShort, compressForStorage, haversineKm,
 } from '../util.js';
 import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
 import * as cart from '../cart.js';
 import { areaChart, barChart, hBarChart, donutChart, sparkline, legend, ringChart, heatMap } from '../charts.js';
 import { go, withBase, toggleTheme, currentTheme } from '../app.js';
+import { createPickerMap } from '../map.js';
+import { qrCanvas } from '../qr.js';
 import { mountQueueScreen } from './queue.js';
 
 const ROLE_KEY = 'mykasir.role';
@@ -276,7 +278,7 @@ function loginGate() {
    ---------------------------------------------------------------------- */
 
 const NAV = [
-  { key: 'pos', label: 'Kasir / POS', icon: 'cash', roles: ['owner', 'kasir'] },
+  { key: 'pos', label: 'Kasir / POS', icon: 'cash', roles: ['kasir'] },
   { key: 'transactions', label: 'Transaksi', icon: 'receipt', roles: ['owner', 'kasir'] },
   { key: 'orders', label: 'Pesanan Online', icon: 'fileText', roles: ['owner', 'kasir'] },
   { key: 'queue', label: 'Antrean', icon: 'list', roles: ['owner', 'kasir'] },
@@ -310,11 +312,16 @@ function portalShell(active = '') {
 
   const renderNav = () => {
     nav.innerHTML = '';
+    const logo = settings().storeLogo;
     nav.append(
       h('div.rail-nav__brand', null,
         h('a.brand', { href: withBase('/') },
-          h('span.brand__mark', null, icon('store')),
-          h('span', null, 'My Kasir')
+          h('span.brand__mark', { class: 'brand__mark--img' },
+            logo
+              ? h('img', { src: logo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
+              : icon('store')
+          ),
+          h('span', null, settings().storeName || 'My Kasir')
         )
       )
     );
@@ -698,10 +705,47 @@ async function posView() {
         h('div.grow', null, h('b', null, 'QRIS'), h('span', null, 'Pindai dengan e-wallet pelanggan'))
       );
 
+      // QR yang ditampilkan saat metode QRIS dipilih.
+      const qrisBox = h('div.mt-4', { style: { textAlign: 'center' } });
+      const buildQris = () => {
+        qrisBox.innerHTML = '';
+        // `settings` di sini adalah snapshot pengaturan milik posView.
+        if (settings.qrisImage) {
+          // Foto QRIS hasil unggahan owner di Pengaturan → Logo & QRIS.
+          qrisBox.append(
+            h('div', null,
+              h('img', {
+                src: settings.qrisImage,
+                alt: 'QRIS',
+                style: { width: '240px', maxWidth: '80%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)' },
+              }),
+              h('div.t-xs.mt-2', { style: { opacity: '0.75' } }, 'Pindai dengan aplikasi e-wallet/bank apa pun')
+            )
+          );
+          return;
+        }
+        // Fallback: QRIS dinamis dari payload EMV.
+        const payload = api.buildQrisPayload(`POS-${Date.now().toString(36).toUpperCase()}`, c.total);
+        qrisBox.append(
+          h('div', null,
+            qrCanvas(payload, { size: 200 }),
+            h('div.t-xs.mt-2', { style: { opacity: '0.75' } },
+              'QRIS dinamis · nominal ', h('b', null, rupiah(c.total)),
+              ' — unggah foto QRIS di Pengaturan agar tampil QR statis toko Anda'
+            )
+          )
+        );
+      };
+
       function sync() {
         cashOpt.classList.toggle('is-active', method === 'Cash');
         qrisOpt.classList.toggle('is-active', method === 'QRIS');
         cashField.classList.toggle('hidden', method !== 'Cash');
+        qrisBox.classList.toggle('hidden', method !== 'QRIS');
+        if (method === 'QRIS' && !qrisBox.dataset.built) {
+          qrisBox.dataset.built = '1';
+          buildQris();
+        }
       }
 
       const cashField = h('div.field.mt-4', null,
@@ -740,6 +784,7 @@ async function posView() {
           h('div.pay', null, cashOpt, qrisOpt),
           cashField,
           changeEl,
+          qrisBox,
           h('div.field.mt-4', null,
             h('label', null, 'Nama pelanggan (opsional)'),
             customerInput
@@ -833,42 +878,56 @@ async function posView() {
    ---------------------------------------------------------------------- */
 
 function showReceipt(receipt) {
-  modal((close) => {
-    const cv = cart.receiptCanvas(receipt, { width: 320 });
-    const holder = h('div', {
-      style: {
-        background: '#fff', padding: '12px', borderRadius: 'var(--r-md)',
-        border: '1px solid var(--line)', maxWidth: '340px', margin: '0 auto',
-      },
-    }, cv);
+  const holder = h('div', {
+    style: {
+      background: '#fff', padding: '12px', borderRadius: 'var(--r-md)',
+      border: '1px solid var(--line)', maxWidth: '340px', margin: '0 auto',
+      textAlign: 'center',
+    },
+  }, h('div.row.gap-2', { style: { justifyContent: 'center' } }, h('span.spinner'), h('span.t-sm', null, 'Menyiapkan struk…')));
 
-    return h('div', null,
-      h('div.modal__head', null,
-        h('div.grow', null,
-          h('h3.t-h2', null, 'Struk'),
-          h('p.t-body', { style: { marginTop: '4px' } }, receipt.code)
-        ),
-        h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+  let cv = null;
+
+  modal((close) => h('div', null,
+    h('div.modal__head', null,
+      h('div.grow', null,
+        h('h3.t-h2', null, 'Struk'),
+        h('p.t-body', { style: { marginTop: '4px' } }, receipt.code)
       ),
-      h('div.modal__body', null, holder),
-      h('div.modal__foot', null,
-        h('button.btn.btn--ghost.grow', {
-          onclick: () => {
-            cv.toBlob((blob) => {
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `struk-${receipt.code}.png`;
-              a.click();
-              URL.revokeObjectURL(url);
-            });
-          },
-        }, icon('download'), 'Unduh'),
-        h('button.btn.btn--primary.grow', {
-          onclick: () => { window.print(); },
-        }, icon('printer'), 'Cetak')
-      )
-    );
+      h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+    ),
+    h('div.modal__body', null, holder),
+    h('div.modal__foot', null,
+      h('button.btn.btn--ghost.grow', {
+        onclick: () => {
+          if (!cv) {
+            toast('Struk belum siap', 'warn');
+            return;
+          }
+          cv.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `struk-${receipt.code}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+        },
+      }, icon('download'), 'Unduh'),
+      h('button.btn.btn--primary.grow', {
+        onclick: () => { window.print(); },
+      }, icon('printer'), 'Cetak')
+    )
+  ));
+
+  // struk baru digambar setelah logo dimuat (async)
+  cart.receiptCanvas(receipt, { width: 320 }).then((canvas) => {
+    cv = canvas;
+    holder.innerHTML = '';
+    holder.append(canvas);
+  }).catch((err) => {
+    holder.innerHTML = '';
+    holder.append(h('div.callout.callout--warn', null, icon('alert'), err.message || 'Struk gagal dibuat'));
   });
 }
 
@@ -878,6 +937,14 @@ function showReceipt(receipt) {
 
 async function ordersView() {
   const orders = await api.getOnlineOrders();
+  const settingsNow = await api.getSettings();
+
+  let couriers = [];
+  try {
+    const raw = settingsNow?.couriers;
+    couriers = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+    if (!Array.isArray(couriers)) couriers = [];
+  } catch { couriers = []; }
 
   const tabs = [
     { key: 'all', label: 'Semua' },
@@ -885,6 +952,7 @@ async function ordersView() {
     { key: 'paid', label: 'Terbayar' },
     { key: 'preparing', label: 'Diproses' },
     { key: 'ready', label: 'Siap' },
+    { key: 'delivering', label: 'Diantar' },
     { key: 'cancelled', label: 'Batal' },
   ];
   let tab = 'all';
@@ -896,7 +964,95 @@ async function ordersView() {
     if (o.status === 'pending') return h('span.badge.badge--warn', null, 'Menunggu bayar');
     if (o.status === 'paid') return h('span.badge.badge--info', null, 'Terbayar');
     if (o.status === 'preparing') return h('span.badge.badge--violet', null, 'Diproses');
+    if (o.status === 'delivering') return h('span.badge.badge--info', null, 'Diantar');
     return h('span.badge.badge--ok', null, 'Siap');
+  };
+
+  /** Detail item pesanan (untuk kasir melihat apa yang dipesan). */
+  const itemsDetail = (o) =>
+    h('div.col.gap-1.mt-2', null,
+      o.items.map((it) =>
+        h('div.row-between', { style: { fontSize: '12.5px' } },
+          h('span', null, `${it.qty}× ${it.name}`),
+          h('span.t-mono', { style: { fontWeight: '600' } }, rupiah(it.total ?? it.price * it.qty))
+        )
+      ),
+      o.note ? h('div.t-xs', { style: { marginTop: '4px', fontStyle: 'italic' } }, `Catatan: ${o.note}`) : null,
+      o.customer ? h('div.t-xs', { style: { marginTop: '4px' } },
+        `Pelanggan: ${o.customer}${o.phone ? ` · ${o.phone}` : ''}`
+      ) : null,
+      o.fulfilment === 'delivery' && o.address
+        ? h('div.t-xs', { style: { marginTop: '2px' } }, `Alamat: ${o.address}`)
+        : null,
+      o.courier
+        ? h('div.t-xs', { style: { marginTop: '2px' } }, `Kurir: ${o.courier}${o.courierPhone ? ` · ${o.courierPhone}` : ''}`)
+        : null
+    );
+
+  /** Modal: pilih kurir sebelum menandai pesanan sedang diantar. */
+  const pickCourier = (o) => {
+    modal((close) => {
+      const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
+      const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon kurir' });
+
+      const submit = async () => {
+        const name = nameInput.value.trim();
+        const phone = phoneInput.value.trim();
+        if (!name) {
+          toast('Nama kurir wajib diisi', 'warn');
+          return;
+        }
+        const res = await api.setOrderStatus(o.code, 'delivering', { courier: name, courierPhone: phone });
+        if (!res || res.ok === false) {
+          toast(res?.error || 'Gagal mengubah status', 'err');
+          return;
+        }
+        toast('Kurir ditugaskan', 'ok');
+        close();
+        refresh();
+      };
+
+      const preset = couriers.length
+        ? h('div.col.gap-2.mb-4', null,
+          h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih dari daftar kurir'),
+          couriers.map((c) =>
+            h('button.pick__opt', {
+              type: 'button',
+              onclick: () => {
+                nameInput.value = c.name || '';
+                phoneInput.value = c.phone || '';
+              },
+            },
+              icon('truck'),
+              h('b', null, c.name),
+              h('span', null, c.phone || 'Tanpa nomor')
+            )
+          )
+        )
+        : h('div.callout.callout--warn.mb-4', null,
+          icon('info'),
+          'Belum ada daftar kurir. Owner bisa menambahkannya di Pengaturan → Kurir. Isi manual bila perlu.'
+        );
+
+      return h('div', null,
+        h('div.modal__head', null,
+          h('div.grow', null,
+            h('h3.t-h2', null, 'Tugaskan kurir'),
+            h('p.t-body', { style: { marginTop: '4px' } }, `Pesanan ${o.code} — ${o.customer || 'tanpa nama'}`)
+          ),
+          h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+        ),
+        h('div.modal__body', null,
+          preset,
+          h('div.field', null, h('label', null, 'Nama kurir'), nameInput),
+          h('div.field.mt-3', null, h('label', null, 'Nomor telepon kurir'), phoneInput)
+        ),
+        h('div.modal__foot', null,
+          h('button.btn.btn--ghost.grow', { onclick: close }, 'Batal'),
+          h('button.btn.btn--primary.grow', { onclick: submit }, icon('send'), 'Tandai diantar')
+        )
+      );
+    });
   };
 
   const render = () => {
@@ -927,7 +1083,8 @@ async function ordersView() {
                   o.fulfilment === 'delivery'
                     ? `Delivery · ${o.address || 'tanpa alamat'}`
                     : 'Ambil di tempat'
-                )
+                ),
+                itemsDetail(o)
               ),
               h('div.col.gap-2', { style: { alignItems: 'flex-end' } },
                 h('div.t-mono', { style: { fontSize: '14px', fontWeight: '700' } }, rupiah(o.total)),
@@ -944,7 +1101,13 @@ async function ordersView() {
                   }, 'Proses') : null,
                   o.status === 'preparing' ? h('button.btn.btn--sm.btn--soft', {
                     onclick: async () => { await api.setOrderStatus(o.code, 'ready'); refresh(); },
-                  }, 'Tandai siap') : null
+                  }, 'Tandai siap') : null,
+                  o.status === 'ready' && o.fulfilment === 'delivery' ? h('button.btn.btn--sm.btn--soft', {
+                    onclick: () => pickCourier(o),
+                  }, icon('truck'), 'Tugaskan kurir') : null,
+                  o.status === 'delivering' ? h('button.btn.btn--sm.btn--ghost', {
+                    onclick: async () => { await api.setOrderStatus(o.code, 'ready'); refresh(); },
+                  }, 'Selesai diantar') : null
                 )
               )
             )
@@ -1754,6 +1917,145 @@ async function settingsView() {
     );
   };
 
+  /**
+   * Baris upload gambar (logo toko / foto QRIS).
+   * Gambar dikompres dulu supaya muat di satu sel Spreadsheet.
+   */
+  const imageRow = (key, label, hint, { square = false, maxSize = 640 } = {}) => {
+    const preview = h('div.img-preview', {
+      style: square
+        ? { width: '72px', height: '72px', borderRadius: 'var(--r-md)' }
+        : { width: '148px', height: '148px', borderRadius: 'var(--r-md)' },
+    });
+    const value = s[key] || '';
+    if (value) preview.append(h('img', { src: value, alt: label }));
+
+    const fileInput = h('input', { type: 'file', accept: 'image/*' });
+    fileInput.style.display = 'none';
+
+    const doUpload = async (file) => {
+      if (!file) return;
+      if (!/^image\//.test(file.type)) {
+        toast('Berkas harus berupa gambar', 'err');
+        return;
+      }
+      try {
+        const dataUrl = await compressForStorage(file, { maxSize });
+        await api.saveSettings({ [key]: dataUrl });
+        preview.innerHTML = '';
+        preview.append(h('img', { src: dataUrl, alt: label }));
+        refreshSettings();
+        toast(`${label} diperbarui`, 'ok');
+      } catch (err) {
+        toast(err.message || 'Gagal mengunggah gambar', 'err');
+      }
+    };
+
+    fileInput.addEventListener('change', () => doUpload(fileInput.files?.[0]));
+    preview.addEventListener('click', () => fileInput.click());
+
+    const removeBtn = value
+      ? h('button.btn.btn--sm.btn--ghost', {
+        onclick: async () => {
+          await api.saveSettings({ [key]: '' });
+          preview.innerHTML = '';
+          refreshSettings();
+          toast(`${label} dihapus`, 'ok');
+        },
+      }, icon('close'), 'Hapus')
+      : null;
+
+    return h('div.field', null,
+      h('label', null, label),
+      h('div.row.gap-3', { style: { alignItems: 'flex-start' } },
+        preview,
+        h('div.grow', null,
+          h('div.t-xs', null, hint),
+          h('div.row.gap-2.mt-3', null,
+            h('button.btn.btn--sm.btn--soft', { onclick: () => fileInput.click() }, icon('upload'), 'Pilih gambar'),
+            removeBtn
+          )
+        )
+      ),
+      fileInput
+    );
+  };
+
+  /**
+   * Daftar kurir (dipakai kasir saat menugaskan kurir).
+   * Disimpan sebagai JSON string agar cocok dengan sheet Settings.
+   */
+  const courierRow = () => {
+    let list = [];
+    try {
+      const raw = s.couriers;
+      list = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+      if (!Array.isArray(list)) list = [];
+    } catch { list = []; }
+
+    const listHost = h('div.col.gap-2');
+    const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
+    const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon (mis. 0812-3456-7890)' });
+
+    const persist = async () => {
+      await api.saveSettings({ couriers: JSON.stringify(list) });
+      refreshSettings();
+    };
+
+    const renderList = () => {
+      listHost.innerHTML = '';
+      if (!list.length) {
+        listHost.append(h('div.t-xs', { style: { opacity: '0.7' } }, 'Belum ada kurir. Tambahkan minimal satu agar kasir bisa menugaskan kurir.'));
+        return;
+      }
+      list.forEach((c, i) => {
+        listHost.append(
+          h('div.list-row', null,
+            h('div.avatar', null, icon('truck')),
+            h('div.grow', null,
+              h('div', { style: { fontSize: '13.5px', fontWeight: '600' } }, c.name),
+              h('div.t-xs', null, c.phone || 'Tanpa nomor telepon')
+            ),
+            h('button.btn.btn--sm.btn--icon.btn--ghost', {
+              'aria-label': 'Hapus kurir',
+              onclick: async () => {
+                list.splice(i, 1);
+                await persist();
+                renderList();
+              },
+            }, icon('close'))
+          )
+        );
+      });
+    };
+
+    const add = async () => {
+      const name = nameInput.value.trim();
+      const phone = phoneInput.value.trim();
+      if (!name) {
+        toast('Nama kurir wajib diisi', 'warn');
+        return;
+      }
+      list.push({ name, phone });
+      nameInput.value = '';
+      phoneInput.value = '';
+      await persist();
+      renderList();
+      toast('Kurir ditambahkan', 'ok');
+    };
+
+    renderList();
+
+    return h('div', null,
+      listHost,
+      h('div.row.gap-2.mt-3', null,
+        h('div.grow', null, nameInput),
+        h('div.grow', null, phoneInput)
+      ),
+      h('button.btn.btn--sm.btn--soft.mt-3', { onclick: add }, icon('plus'), 'Tambah kurir')
+    );
+  };
+
   const render = () => {
     host.innerHTML = '';
 
@@ -1781,8 +2083,9 @@ async function settingsView() {
           h('div.panel', null,
             h('div.panel__head', null, h('h3.t-h3', null, 'Pengiriman & pembayaran')),
             h('div.panel__body', null,
-              textRow('deliveryFee', 'Ongkir flat (Rp)', 'Dipakai untuk pesanan delivery', 'number'),
-              h('div.mt-3', null, textRow('deliveryRadiusKm', 'Radius delivery (km)', 'Batas jarak pengiriman', 'number')),
+              textRow('deliveryFee', 'Ongkir flat (Rp)', 'Dipakai bila tarif per km kosong', 'number'),
+              h('div.mt-3', null, textRow('deliveryPerKm', 'Ongkir per km (Rp)', 'Isi > 0 untuk ongkir otomatis sesuai jarak', 'number')),
+              h('div.mt-3', null, textRow('deliveryRadiusKm', 'Radius delivery (km)', 'Batas jarak pengiriman; 0 = tanpa batas', 'number')),
               h('div.mt-3', null, textRow('qrisMerchant', 'Nama merchants QRIS', 'Ditampilkan di struk')),
               h('div.mt-3', null, textRow('qrisNmid', 'NMID QRIS', 'Nomor merchants dinamis')),
               h('div.mt-3', null, textRow('portalPin', 'PIN portal', 'PIN 6 digit untuk membuka portal internal', 'text'))
@@ -1830,27 +2133,129 @@ async function settingsView() {
         )
       );
     } else if (tab === 'lokasi') {
+      const latInput = h('input.input', { type: 'number', value: s.storeLat ?? '', step: 'any' });
+      const lngInput = h('input.input', { type: 'number', value: s.storeLng ?? '', step: 'any' });
+      const radiusInput = h('input.input', { type: 'number', value: s.deliveryRadiusKm ?? 0, step: '0.1', min: '0' });
+      const coordLabel = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.75' } });
+
+      const picker = createPickerMap({
+        lat: Number(s.storeLat) || -6.9147,
+        lng: Number(s.storeLng) || 107.6098,
+        zoom: 15,
+        radiusKm: Number(s.deliveryRadiusKm) || 0,
+        height: 400,
+        onChange: ({ lat, lng }) => {
+          latInput.value = lat.toFixed(6);
+          lngInput.value = lng.toFixed(6);
+          coordLabel.textContent = `Titik toko: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        },
+      });
+
+      const savePoint = async () => {
+        const lat = Number(latInput.value);
+        const lng = Number(lngInput.value);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          toast('Koordinat tidak valid', 'err');
+          return;
+        }
+        const res = await api.saveSettings({ storeLat: lat, storeLng: lng });
+        if (res && res.ok === false) {
+          toast(res.error || 'Gagal menyimpan lokasi', 'err');
+          return;
+        }
+        refreshSettings();
+        toast('Lokasi toko disimpan', 'ok');
+      };
+
+      latInput.addEventListener('change', () => {
+        picker.setPoint(latInput.value, lngInput.value);
+        savePoint();
+      });
+      lngInput.addEventListener('change', () => {
+        picker.setPoint(latInput.value, lngInput.value);
+        savePoint();
+      });
+      radiusInput.addEventListener('change', async () => {
+        const km = Number(radiusInput.value) || 0;
+        picker.setRadius(km);
+        await api.saveSettings({ deliveryRadiusKm: km });
+        refreshSettings();
+        toast('Radius layanan disimpan', 'ok', 1400);
+      });
+
       host.append(
         h('div.panel', null,
           h('div.panel__head', null, h('h3.t-h3', null, 'Lokasi toko & titik delivery')),
           h('div.panel__body', null,
             h('p.t-body.mb-4', null,
-              'Pilih lokasi dengan klik pada peta. Titik ini menentukan jarak ongkir dan_area_ delivery yang ditampilkan kepada pelanggan.'
+              'Ketuk / klik pada peta untuk menandai lokasi toko, atau seret pinnya. Titik ini menjadi acuan jarak ongkir dan batas radius layanan.'
             ),
             h('div.split-2', null,
-              textRow('storeLat', 'Latitude', 'Diperbarui saat memilih titik pada peta', 'number'),
-              textRow('storeLng', 'Longitude', 'Diperbarui saat memilih titik pada peta', 'number')
+              h('div.field', null, h('label', null, 'Latitude'), latInput),
+              h('div.field', null, h('label', null, 'Longitude'), lngInput)
             ),
-            h('div.mt-4', { id: 'map-holder', style: { height: '380px', borderRadius: 'var(--r-lg)', overflow: 'hidden', border: '1px solid var(--line)' } }),
+            coordLabel,
+            h('div.mt-4', null, picker.el),
+            h('div.field.mt-4', null,
+              h('label', null, 'Radius layanan (km)'),
+              radiusInput,
+              h('div.field__hint', null, 'Lingkaran biru pada peta adalah area layanan. 0 = tanpa batas jarak. Kasir/pelanggan otomatis ditolak bila titik tujuan di luar radius.')
+            ),
+            h('div.row.gap-2.mt-3', null,
+              h('button.btn.btn--primary', { onclick: savePoint }, icon('check'), 'Simpan lokasi'),
+              h('button.btn.btn--soft', {
+                onclick: () => {
+                  navigator.geolocation?.getCurrentPosition((pos) => {
+                    const { latitude, longitude } = pos.coords;
+                    latInput.value = latitude.toFixed(6);
+                    lngInput.value = longitude.toFixed(6);
+                    picker.setPoint(latitude, longitude);
+                    savePoint();
+                  }, () => toast('Lokasi GPS tidak dapat diakses', 'err'));
+                },
+              }, icon('navigation'), 'Gunakan GPS saya')
+            ),
             h('div.callout.mt-4', null,
               icon('info'),
-              'Peta memakai OpenStreetMap — gratis tanpa kunci API. Pilih titik baru dengan mengeklik lokasi yang diinginkan.'
+              'Peta memakai OpenStreetMap — gratis tanpa kunci API, bisa dipakai untuk produksi.'
             )
           )
         )
       );
+    } else if (tab === 'branding') {
+      host.append(
+        h('div.panel', null,
+          h('div.panel__head', null, h('h3.t-h3', null, 'Logo toko & QRIS')),
+          h('div.panel__body', null,
+            h('p.t-body.mb-4', null,
+              'Logo dipakai pada header web, halaman muka, dan bagian atas struk. Foto QRIS otomatis muncul di layar pembayaran — pelanggan tinggal-scan.'
+            ),
 
-      setTimeout(() => mountMap(), 60);
+            imageRow('storeLogo', 'Logo toko', 'Disarankan gambar persegi (512×512 px) dengan latar transparan.', { square: true, maxSize: 400 }),
+
+            h('div.divider'),
+
+            imageRow('qrisImage', 'Foto QRIS statis', 'Unggah foto QRIS dari provider Anda. Tampil otomatis saat pelanggan memilih pembayaran QRIS.', { square: true, maxSize: 640 }),
+
+            h('div.callout.mt-4', null,
+              icon('info'),
+              'Bila foto QRIS belum diunggah, aplikasi tetap membuat QRIS dinamis dari payload EMV (merchant + nominal + CRC) seperti sebelumnya.'
+            )
+          )
+        )
+      );
+    } else if (tab === 'kurir') {
+      host.append(
+        h('div.panel', null,
+          h('div.panel__head', null, h('h3.t-h3', null, 'Daftar kurir')),
+          h('div.panel__body', null,
+            h('p.t-body.mb-4', null,
+              'Kasir memilih salah satu kurir saat menandai pesanan delivery "diantar". Nama dan nomor telepon kurir langsung terlihat oleh pelanggan di halaman lacak pesanan.'
+            ),
+            courierRow()
+          )
+        )
+      );
     } else if (tab === 'data') {
       host.append(
         h('div.panel', null,
@@ -1990,6 +2395,8 @@ async function settingsView() {
   const tabs = [
     { key: 'umum', label: 'Umum', icon: 'settings' },
     { key: 'lokasi', label: 'Lokasi', icon: 'map' },
+    { key: 'branding', label: 'Logo & QRIS', icon: 'image' },
+    { key: 'kurir', label: 'Kurir', icon: 'truck' },
     { key: 'data', label: 'Data', icon: 'database' },
   ];
 
@@ -2009,98 +2416,6 @@ async function settingsView() {
 
   render();
   return h('div', null, tabBar, host);
-}
-
-/* -------------------------------------------------------------------------
-   Point-and-click map (free OpenStreetMap)
-   ---------------------------------------------------------------------- */
-
-function mountMap() {
-  const holder = document.getElementById('map-holder');
-  if (!holder || holder.dataset.ready) return;
-  holder.dataset.ready = '1';
-
-  const s = settings();
-  const lat = Number(s.storeLat) || -6.9147;
-  const lng = Number(s.storeLng) || 107.6098;
-
-  const fail = (msg) => {
-    holder.innerHTML = '';
-    holder.append(h('div.callout.callout--warn', null, icon('alert'), msg));
-  };
-
-  // Peta memerlukan Koordinat yang valid — cek dulu sebelum memuat Leaflet.
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    fail('Koordinat toko belum valid. Isi latitude & longitude secara manual.');
-    return;
-  }
-
-  const draw = () => {
-    const L = window.L;
-    if (!L) {
-      fail('Peta tidak dapat dimuat — pustaka Leaflet gagal dimuat.');
-      return;
-    }
-
-    holder.innerHTML = '';
-    let map;
-    try {
-      map = L.map(holder, { zoomControl: true }).setView([lat, lng], 14);
-    } catch (err) {
-      fail('Peta tidak dapat ditampilkan: ' + (err?.message || 'Kesalahan tidak diketahui'));
-      return;
-    }
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap',
-    }).addTo(map);
-
-    const marker = L.marker([lat, lng], { draggable: true }).addTo(map);
-
-    const persist = (pos) => {
-      api.saveSettings({ storeLat: pos.lat, storeLng: pos.lng })
-        .then((res) => {
-          if (res && res.ok === false) {
-            toast(res.error || 'Gagal menyimpan lokasi', 'err');
-            return;
-          }
-          refreshSettings();
-          toast('Lokasi toko diperbarui', 'ok', 1800);
-        })
-        .catch((err) => toast(err.message || 'Gagal menyimpan lokasi', 'err'));
-    };
-
-    marker.on('dragend', () => persist(marker.getLatLng()));
-    map.on('click', (e) => {
-      marker.setLatLng(e.latlng);
-      persist(e.latlng);
-    });
-
-    setTimeout(() => map.invalidateSize(), 120);
-  };
-
-  // Leaflet sudah dimuat sebelumnya (pindah tab lagi) -> langsung gambar.
-  if (window.L) {
-    draw();
-    return;
-  }
-
-  // Muat Leaflet dari salinan lokal (bisa dipakai offline).
-  if (!document.querySelector('link[data-leaflet-css]')) {
-    const css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = withBase('vendor/leaflet.css');
-    css.dataset.leafletCss = '1';
-    document.head.append(css);
-  }
-
-  const script = document.createElement('script');
-  script.src = withBase('vendor/leaflet.js');
-  script.dataset.leafletJs = '1';
-  script.onload = draw;
-  script.onerror = () => fail('Gagal memuat pustaka peta (vendor/leaflet.js).');
-  document.head.append(script);
 }
 
 /* ==========================================================================

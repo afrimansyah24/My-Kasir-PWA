@@ -17,7 +17,7 @@
  */
 
 import * as store from './store.js';
-import { orderCode, uid } from './util.js';
+import { orderCode, uid, haversineKm } from './util.js';
 
 const SIM_LATENCY = 120;
 
@@ -56,7 +56,10 @@ export async function getPublicCatalogData() {
       lat: s.storeLat,
       lng: s.storeLng,
       deliveryFee: s.deliveryFee,
+      deliveryPerKm: s.deliveryPerKm,
       deliveryRadiusKm: s.deliveryRadiusKm,
+      logo: s.storeLogo || '',
+      qrisImage: s.qrisImage || '',
     },
     features: {
       onlineOrder: s.featureOnlineOrder,
@@ -98,7 +101,32 @@ export async function createOnlineOrder(payload) {
   const subtotal = items.reduce((s2, it) => s2 + it.price * it.qty, 0);
   const discount = Math.max(0, Math.min(subtotal, Number(payload.discount) || 0));
   const fulfilment = payload.fulfilment === 'delivery' && s.featureDelivery ? 'delivery' : 'pickup';
-  const deliveryFee = fulfilment === 'delivery' ? Number(s.deliveryFee) || 0 : 0;
+
+  // Lokasi tujuan pelanggan (dipilih di peta saat checkout).
+  const destLat = payload.lat === '' || payload.lat === undefined || payload.lat === null ? null : Number(payload.lat);
+  const destLng = payload.lng === '' || payload.lng === undefined || payload.lng === null ? null : Number(payload.lng);
+  let distanceKm = 0;
+
+  if (fulfilment === 'delivery') {
+    const radius = Number(s.deliveryRadiusKm) || 0;
+    if (destLat !== null && destLng !== null && !isNaN(destLat) && !isNaN(destLng)) {
+      distanceKm = haversineKm(Number(s.storeLat), Number(s.storeLng), destLat, destLng);
+    }
+    if (radius > 0) {
+      if (!distanceKm) return { ok: false, error: 'Titik lokasi pengiriman belum dipilih pada peta' };
+      if (distanceKm > radius) {
+        return { ok: false, error: `Jarak tujuan ${distanceKm.toFixed(1)} km melebihi radius layanan ${radius} km` };
+      }
+    }
+  }
+
+  let deliveryFee = 0;
+  if (fulfilment === 'delivery') {
+    const perKm = Number(s.deliveryPerKm) || 0;
+    deliveryFee = perKm > 0 && distanceKm > 0
+      ? Math.ceil(perKm * distanceKm)
+      : Number(s.deliveryFee) || 0;
+  }
   const total = subtotal - discount + deliveryFee;
 
   const code = orderCode();
@@ -132,6 +160,10 @@ export async function createOnlineOrder(payload) {
     expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
     paidAt: null,
     qrisPayload: buildQrisPayload(code, total),
+    lat: fulfilment === 'delivery' ? destLat : null,
+    lng: fulfilment === 'delivery' ? destLng : null,
+    courier: '',
+    courierPhone: '',
   };
 
   store.saveOrder(order);
@@ -344,9 +376,9 @@ export async function deleteTransactionRecord(id) {
   return { ok: true };
 }
 
-export async function setOrderStatus(code, status) {
+export async function setOrderStatus(code, status, extra = {}) {
   await lag(120);
-  const o = store.updateOrderStatus(code, status);
+  const o = store.updateOrderStatus(code, status, extra);
   return { ok: !!o, order: o };
 }
 

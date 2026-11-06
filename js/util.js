@@ -256,6 +256,11 @@ const ICONS = {
   more: 'M12 6.5h.01M12 12h.01M12 17.5h.01',
   database: 'M12 8c4.97 0 9-1.34 9-3s-4.03-3-9-3-9 1.34-9 3 4.03 3 9 3Zm9 3c0 1.66-4.03 3-9 3s-9-1.34-9-3M3 8v8c0 1.66 4.03 3 9 3s9-1.34 9-3V8',
   globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.21 0 4-4.03 4-9s-1.79-9-4-9-4 4.03-4 9 1.79 9 4 9ZM3.6 9h16.8M3.6 15h16.8',
+  phone: 'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92Z',
+  image: 'M3 3h18v18H3V3Zm0 14 5-5 4 4 3-3 6 6M8.5 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z',
+  note: 'M4 4h16v16H4V4Zm4 4h8M8 12h8M8 16h5',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z',
+  navigation: 'M3 11 22 2l-9 19-2-8-8-2Z',
 };
 
 /** Build an inline SVG icon element. */
@@ -441,4 +446,77 @@ export function fileToDataUrl(file, maxSize = 900) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+/* -------------------------------------------------------------------------
+   Geo & image-storage helpers
+   ---------------------------------------------------------------------- */
+
+/** Jarak dua titik GPS dalam km (haversine). */
+export function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const rad = (d) => (Number(d) * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1);
+  const dLng = rad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Load gambar sebagai Promise (untuk canvas / preview). */
+export function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Gambar gagal dimuat'));
+    img.src = src;
+  });
+}
+
+/**
+ * Kompres gambar agar aman disimpan di sel Spreadsheet (GAS membatasi
+ * ± 45.000 karakter per sel → data-URL base64 harus <= ~maxBytes).
+ * Otomatis menurunkan ukuran sisi & kualitas sampai muat.
+ */
+export async function compressForStorage(file, { maxSize = 640, quality = 0.85, maxBytes = 44_000 } = {}) {
+  let dataUrl;
+  try {
+    dataUrl = await fileToDataUrl(file, maxSize);
+  } catch {
+    dataUrl = await fileToDataUrl(file, 320);
+  }
+
+  const encode = async (w, hgt, q) => {
+    const img = await loadImage(dataUrl);
+    const scale = Math.min(1, w / img.width, hgt / img.height);
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.width * scale));
+    cv.height = Math.max(1, Math.round(img.height * scale));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const url = cv.toDataURL('image/webp', q);
+    // webp tidak didukung lama -> kembali ke jpeg
+    if (!url.startsWith('data:image/webp')) return cv.toDataURL('image/jpeg', q);
+    return url;
+  };
+
+  let size = dataUrl.length;
+  if (size <= maxBytes) return dataUrl;
+
+  let q = quality;
+  let edge = Math.min(maxSize, 480);
+  for (let i = 0; i < 6 && size > maxBytes; i++) {
+    const res = await encode(edge, edge, q);
+    size = res.length;
+    if (size <= maxBytes) return res;
+    dataUrl = res;
+    q = Math.max(0.4, q - 0.14);
+    edge = Math.max(160, Math.round(edge * 0.75));
+  }
+  return dataUrl;
+}
+
+/** Data-URL gambar valid? (string kosong / non-data dianggap tidak). */
+export function isImageValue(v) {
+  return typeof v === 'string' && v.startsWith('data:image/');
 }

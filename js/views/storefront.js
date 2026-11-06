@@ -7,6 +7,7 @@
 import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, uid, orderCode, modal, closeModal, copyText, emptyState,
+  compressForStorage,
 } from '../util.js';
 import * as api from '../api.js';
 import * as store from '../store.js';
@@ -14,6 +15,7 @@ import * as cart from '../cart.js';
 import { qrCanvas } from '../qr.js';
 import { areaChart, donutChart, legend, sparkline } from '../charts.js';
 import { go, withBase } from '../app.js';
+import { createPickerMap } from '../map.js';
 
 let state = {
   data: null,
@@ -28,13 +30,23 @@ let state = {
    Header
    ---------------------------------------------------------------------- */
 
+/** Logo toko bila sudah diunggah di Pengaturan, else ikon default. */
+function brandMark(logo, fallbackIcon = 'store') {
+  if (logo) {
+    return h('span.brand__mark', { class: 'brand__mark--img' },
+      h('img', { src: logo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
+    );
+  }
+  return h('span.brand__mark', null, icon(fallbackIcon));
+}
+
 function header(data) {
   const c = cart.cart();
   return h('header.shop-head', null,
     h('div.shell', null,
       h('div.shop-head__inner', null,
         h('a.brand', { href: withBase('/'), 'data-nav': 'home' },
-          h('span.brand__mark', null, icon('store')),
+          brandMark(data.store.logo),
           h('span', null,
             data.store.name,
             h('span.brand__sub', null, data.store.tagline)
@@ -195,7 +207,9 @@ function productCard(p, data, index) {
   const cat = data.categories.find((c) => c.id === p.category);
   const out = !p.available;
 
-  return h('article.pcard', { style: { animationDelay: `${Math.min(index, 12) * 40}ms` } },
+  // Kartu kotak besar: foto penuh + detail lengkap (kategori, deskripsi,
+  // stok, satuan, nego, harga) supaya pelanggan tidak perlu membuka modal.
+  return h('article.pcard.pcard--rich', { style: { animationDelay: `${Math.min(index, 12) * 40}ms` } },
     h('div.pcard__media', { onclick: () => openProduct(p, data) },
       p.image
         ? h('img', { src: p.image, alt: p.name, loading: 'lazy', width: '400', height: '400' })
@@ -204,12 +218,22 @@ function productCard(p, data, index) {
       p.negotiable ? h('span.pcard__tag.badge.badge--violet', { style: { left: 'auto', right: '10px' } }, 'Bisa nego') : null
     ),
     h('div.pcard__body', { onclick: () => openProduct(p, data) },
-      h('div.pcard__cat', null, cat?.name || 'Umum'),
+      h('div.pcard__cat', null,
+        h('span.badge.badge--info', null, cat?.name || 'Umum'),
+        p.trackStock
+          ? h('span.t-xs', {
+            style: { marginLeft: '6px', color: out ? 'var(--coral)' : 'var(--ink-4)', fontWeight: '600' },
+          }, out ? 'Habis' : `Stok ${p.stock} ${p.unit}`)
+          : null
+      ),
       h('h3.pcard__name', null, p.name),
+      p.description
+        ? h('p.pcard__desc', null, p.description)
+        : null,
       h('div.pcard__foot', null,
         h('div.pcard__price', null,
           rupiah(p.price),
-          p.trackStock ? h('small', null, `Stok ${p.stock} ${p.unit}`) : null
+          h('small', null, p.trackStock ? `per ${p.unit}` : 'tersedia')
         ),
         h('button.pcard__add', {
           disabled: out,
@@ -515,6 +539,20 @@ function openCheckout() {
     );
     addressField.classList.add('hidden');
 
+    /* --- peta pilih titik lokasi (delivery) --------------------------- */
+    const mapHolder = h('div.mt-2');
+    const mapInfo = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.8' } });
+    const mapField = h('div.field.mt-3', null,
+      h('label', null, 'Titik lokasi pengiriman'),
+      h('div.t-xs', { style: { marginBottom: '6px', opacity: '0.85' } },
+        'Tap pada peta untuk menandai rumah/tujuan Anda — ongkir dan batas jarak dihitung otomatis.'
+      ),
+      mapHolder
+    );
+    mapField.classList.add('hidden');
+    let picker = null;
+    let dest = { lat: null, lng: null };
+
     const deliveryOpt = h('button.pick__opt', {
       type: 'button',
       onclick: () => { fulfilment = 'delivery'; syncPick(); },
@@ -536,19 +574,75 @@ function openCheckout() {
       deliveryOpt.classList.toggle('is-active', fulfilment === 'delivery');
       pickupOpt.classList.toggle('is-active', fulfilment === 'pickup');
       addressField.classList.toggle('hidden', fulfilment !== 'delivery');
+      mapField.classList.toggle('hidden', fulfilment !== 'delivery');
       cart.setFulfilment(fulfilment);
+
+      // Peta & ongkir hanya relevan untuk delivery.
+      if (fulfilment === 'delivery' && !picker) {
+        mountDeliveryMap();
+      }
+
       updateTotals();
     }
+
+    /** Buat peta penanda lokasi tujuan (ala Gojek/Grab). */
+    const mountDeliveryMap = () => {
+      const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
+      const perKm = Number(data.store.deliveryPerKm) || 0;
+      const storeLat = Number(data.store.lat) || -6.9147;
+      const storeLng = Number(data.store.lng) || 107.6098;
+
+      const info = () => {
+        const km = cart.destinationKm();
+        if (km === null) return 'Belum ada titik yang dipilih.';
+        const fee = perKm > 0 ? rupiah(Math.ceil(perKm * km)) : rupiah(data.store.deliveryFee);
+        const within = radiusKm > 0 ? (km <= radiusKm ? ' (dalam radius layanan)' : ' (di luar radius layanan)') : '';
+        return `Jarak ke toko ${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`} · ongkir ${fee}${within}`;
+      };
+      const updateMapInfo = () => { mapInfo.textContent = info(); };
+
+      picker = createPickerMap({
+        lat: storeLat,
+        lng: storeLng,
+        zoom: 13,
+        radiusKm,
+        height: 300,
+        onChange: ({ lat, lng }) => {
+          dest = { lat, lng };
+          cart.setDestination(lat, lng);
+          updateTotals();
+          updateMapInfo();
+        },
+      });
+
+      mapHolder.append(picker.el);
+      mapHolder.append(mapInfo);
+
+      // Lokasi awal: titik toko (pelanggan menggeser/menapit ke alamatnya).
+      dest = { lat: storeLat, lng: storeLng };
+      cart.setDestination(storeLat, storeLng);
+      updateMapInfo();
+    };
 
     const totalsHost = h('div.sum.mt-5');
     const summaryHost = h('div', { style: { marginBottom: 'var(--s-5)' } });
 
     function updateTotals() {
       const c = cart.cart();
+      const perKm = Number(data.store.deliveryPerKm) || 0;
+      const km = cart.destinationKm();
+
       totalsHost.innerHTML = '';
+      const feeRow = fulfilment === 'delivery'
+        ? h('div.sum__row', null,
+          h('span', null, perKm > 0 ? `Ongkir${km !== null ? ` (${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`})` : ''}` : 'Ongkir'),
+          h('b', null, perKm > 0 && km === null ? 'pilih titik' : rupiah(c.deliveryFee))
+        )
+        : null;
+
       totalsHost.append(
         h('div.sum__row', null, h('span', null, `Subtotal (${c.count} item)`), h('b', null, rupiah(c.subtotal))),
-        c.deliveryFee > 0 ? h('div.sum__row', null, h('span', null, 'Ongkir'), h('b', null, rupiah(c.deliveryFee))) : null,
+        feeRow,
         h('div.sum__row.sum__row--total', null, h('span', null, 'Total'), h('b', null, rupiah(c.total)))
       );
 
@@ -589,6 +683,7 @@ function openCheckout() {
         phoneInput
       ),
       addressField,
+      mapField,
       h('div.field.mt-3', null,
         h('label', null, 'Catatan (opsional)'),
         noteInput
@@ -654,6 +749,20 @@ function openCheckout() {
           h('button.btn.btn--ghost.grow', { onclick: close }, 'Batal'),
           h('button.btn.btn--primary.grow', {
             onclick: () => {
+              if (fulfilment === 'delivery') {
+                const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
+                const km = cart.destinationKm();
+                if (radiusKm > 0) {
+                  if (km === null) {
+                    toast('Tandai titik tujuan pada peta terlebih dahulu', 'warn');
+                    return;
+                  }
+                  if (km > radiusKm) {
+                    toast(`Tujuan ${km.toFixed(1)} km — di luar radius layanan ${radiusKm} km`, 'err');
+                    return;
+                  }
+                }
+              }
               cart.setField('customer', nameInput.value.trim());
               cart.setField('phone', phoneInput.value.trim());
               cart.setField('address', addressInput.value.trim());
@@ -699,6 +808,8 @@ function openCheckout() {
         fulfilment,
         payment,
         discount: 0,
+        lat: fulfilment === 'delivery' ? cart.cart().destLat : null,
+        lng: fulfilment === 'delivery' ? cart.cart().destLng : null,
       });
 
       btn.disabled = false;
@@ -719,9 +830,21 @@ function openCheckout() {
       step3.innerHTML = '';
 
       if (payment === 'QRIS') {
-        const canvas = qrCanvas(order.qrisPayload || api.buildQrisPayload(order.code, order.total), { size: 208 });
+        // Foto QRIS toko (unggahan owner) → diprioritaskan; kalau belum ada,
+        // pakai QRIS dinamis dari payload EMV (nominal otomatis).
+        const staticQris = data.store.qrisImage;
         const holder = h('div.qris__code');
-        holder.append(canvas);
+        if (staticQris) {
+          holder.append(
+            h('img', {
+              src: staticQris,
+              alt: 'QRIS toko',
+              style: { width: '208px', maxWidth: '100%', borderRadius: 'var(--r-md)' },
+            })
+          );
+        } else {
+          holder.append(qrCanvas(order.qrisPayload || api.buildQrisPayload(order.code, order.total), { size: 208 }));
+        }
 
         let remaining = 600;
         const timerLabel = h('div.t-sm', null);
@@ -751,7 +874,9 @@ function openCheckout() {
             h('div', null,
               h('div.t-h3', null, 'Bayar dengan QRIS'),
               h('p.t-body.mt-2', null,
-                'Nominal sudah terisi otomatis. Buka aplikasi e-wallet Anda dan pindai kode di samping.'
+                staticQris
+                  ? 'Pindai kode QRIS toko dengan aplikasi e-wallet, lalu masukkan nominal sesuai jumlah di atas.'
+                  : 'Nominal sudah terisi otomatis. Buka aplikasi e-wallet Anda dan pindai kode di samping.'
               ),
               h('div.callout.mt-3', null, icon('clock'), timerLabel),
               h('button.btn.btn--soft.btn--block.mt-3', {
@@ -887,15 +1012,21 @@ const STATUS_FLOW = [
   { key: 'pending', label: 'Menunggu pembayaran', icon: 'clock' },
   { key: 'paid', label: 'Pembayaran diterima', icon: 'wallet' },
   { key: 'preparing', label: 'Pesanan diproses', icon: 'box' },
-  { key: 'ready', label: 'Siap diambil / dikirim', icon: 'checkCircle' },
+  { key: 'delivering', label: 'Sedang diantar kurir', icon: 'truck' },
+  { key: 'ready', label: 'Selesai / siap diambil', icon: 'checkCircle' },
 ];
 
 function orderStatus(order) {
-  const idx = STATUS_FLOW.findIndex((s) => s.key === order.status);
+  // Kiripickup tidak melewati tahap "diantar" — alurnya jadi 4 langkah saja.
+  const flow = order.fulfilment === 'delivery'
+    ? STATUS_FLOW
+    : STATUS_FLOW.filter((s) => s.key !== 'delivering');
+
+  const idx = flow.findIndex((s) => s.key === order.status);
   const cancelled = order.status === 'cancelled';
 
   const steps = h('div.stepper');
-  STATUS_FLOW.forEach((s, i) => {
+  flow.forEach((s, i) => {
     const done = !cancelled && idx >= 0 && i < idx;
     const active = !cancelled && i === idx;
     steps.append(
@@ -913,6 +1044,12 @@ function orderStatus(order) {
     );
   });
 
+  const statusLabel = cancelled ? 'Kedaluwarsa'
+    : order.status === 'delivering' ? 'Diantar'
+      : order.status === 'ready' ? 'Selesai'
+        : order.status === 'pending' ? 'Menunggu bayar'
+          : 'Diproses';
+
   return h('div', null,
     h('div.panel', null,
       h('div.panel__head', null,
@@ -920,8 +1057,8 @@ function orderStatus(order) {
           h('div.t-h3', null, `Pesanan ${order.code}`),
           h('div.t-sm', null, fmtDateTime(order.ts))
         ),
-        h('span', { class: `badge ${cancelled ? 'badge--err' : order.status === 'ready' ? 'badge--ok' : order.status === 'pending' ? 'badge--warn' : 'badge--info'}` },
-          cancelled ? 'Kedaluwarsa' : order.status === 'ready' ? 'Siap' : order.status === 'pending' ? 'Menunggu bayar' : 'Diproses')
+        h('span', { class: `badge ${cancelled ? 'badge--err' : order.status === 'ready' || order.status === 'delivering' ? 'badge--ok' : order.status === 'pending' ? 'badge--warn' : 'badge--info'}` },
+          statusLabel)
       ),
       h('div.panel__body', null,
         cancelled
@@ -932,6 +1069,30 @@ function orderStatus(order) {
           : null
       )
     ),
+
+    // Kartu kurir: tampil setelah kurir ditugaskan — pelanggan bisa langsung
+    // menelepon kurirnya.
+    order.courier
+      ? h('div.panel.mt-4', null,
+        h('div.panel__head', null, h('h3.t-h3', null, 'Kurir pengantaran')),
+        h('div.panel__body', null,
+          h('div.row.gap-3', { style: { alignItems: 'center' } },
+            h('div.avatar.avatar--teal', null, icon('truck')),
+            h('div.grow', null,
+              h('div', { style: { fontWeight: '700', fontSize: '14.5px' } }, order.courier),
+              order.courierPhone
+                ? h('div.t-sm', null, order.courierPhone)
+                : h('div.t-xs', { style: { opacity: '0.7' } }, 'Tanpa nomor telepon')
+            ),
+            order.courierPhone
+              ? h('a.btn.btn--primary.btn--sm', {
+                href: `tel:${String(order.courierPhone).replace(/[^0-9+]/g, '')}`,
+              }, icon('phone'), 'Telepon kurir')
+              : null
+          )
+        )
+      )
+      : null,
 
     h('div.panel.mt-4', null,
       h('div.panel__head', null, h('h3.t-h3', null, 'Detail pesanan')),
@@ -968,7 +1129,7 @@ function footer(data) {
       h('div.foot__grid', null,
         h('div', null,
           h('a.brand', { href: withBase('/') },
-            h('span.brand__mark', null, icon('store')),
+            brandMark(data.store.logo),
             h('span', null, data.store.name)
           ),
           h('p.t-sm.mt-3', { style: { maxWidth: '34ch' } }, data.store.tagline),

@@ -32,7 +32,7 @@
  * ke GAS_URL — aplikasi akan menunggu server yang tidak pernah menjawab.
  */
 
-export const GAS_URL = 'https://script.google.com/macros/s/AKfycbxGGOG-qsWzG1Wl2fDUuKCjFv5evCORQmty7fN3qLImmJjiqP4H6XWqDHib7aIyq0iu7w/exec';
+export const GAS_URL = '';
 
 /** Token opsional untuk backend Apps Script. Kosongkan bila tidak dipakai. */
 export const GAS_TOKEN = '';

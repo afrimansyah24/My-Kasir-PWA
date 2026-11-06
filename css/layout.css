@@ -366,6 +366,26 @@
   overflow: hidden;
 }
 
+/* Kartu katalog lebih informatif, layout responsif kotak agar foto & detail
+   terbaca langsung tanpa harus membuka modal produk. */
+.pcard--rich { min-width: 0; }
+.pcard--rich .pcard__media { aspect-ratio: 1 / 0.82; padding: 8%; }
+.pcard--rich .pcard__body { gap: 8px; padding: clamp(12px, 1.4vw, 18px); }
+.pcard--rich .pcard__cat { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; letter-spacing: 0; text-transform: none; }
+.pcard--rich .pcard__name { font-size: clamp(14px, 1.1vw, 17px); }
+.pcard__desc {
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 4.5em;
+}
+.pcard--rich .pcard__price small { display: block; margin-top: 3px; color: var(--ink-400); font-size: 10px; font-weight: 500; }
+.pcard__cat .badge { font-size: 9px; padding: 3px 7px; }
+
 .pcard__foot {
   display: flex;
   align-items: center;
@@ -1443,3 +1463,138 @@
 }
 
 .foot__link:hover { color: var(--cobalt); }
+
+/* ==========================================================================
+   1. Komponen baru (logo, QRIS, kurir, peta)
+   ========================================================================== */
+
+/* Preview unggahan gambar (Pengaturan → Logo & QRIS) */
+.img-preview {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: var(--surface-sunk);
+  border: 1.5px dashed var(--ink-300);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  min-height: 72px;
+}
+.img-preview::after {
+  content: '+';
+  color: var(--ink-400);
+  font-size: 22px;
+  font-weight: 700;
+}
+.img-preview:has(img) { border-style: solid; border-color: var(--line); background: var(--surface); }
+.img-preview:has(img)::after { content: none; }
+.img-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.img-preview:hover { border-color: var(--cobalt); }
+
+/* Peta Leaflet terbungkus kemasan aplikasi */
+.map-picker { background: var(--surface-sunk); z-index: 0; }
+.map-picker .leaflet-container { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map-picker__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: var(--s-4);
+  text-align: center;
+  background: var(--surface-sunk);
+}
+.map-picker__overlay:empty { display: none; }
+.map-picker .leaflet-control-attribution { font-size: 9.5px; }
+
+/* Kartu kurir & baris daftar kurir */
+.list-row .grow { min-width: 0; word-break: break-word; }
+
+/* ==========================================================================
+   2. Responsif: lebar layar penuh tanpa konten terpotong
+   ========================================================================== */
+
+/* Anak grid/flex butuh min-width:0 agar teks panjang tidak memaksa overflow */
+.grid > *,
+.hero__inner > *,
+.split-2 > *,
+.dash > *,
+.pos > *,
+.portal > *,
+.catalog__head > *,
+.pick > *,
+.steps > * { min-width: 0; }
+
+/* Grid katalog: di layar sangat sempit kolom tidak boleh memaksa scroll */
+.grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 228px), 1fr));
+}
+@media (max-width: 520px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 380px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+/* Tabel bisa di-scroll mendatar (jangan terpotong) */
+.table-wrap { -webkit-overflow-scrolling: touch; }
+
+/* Modal: nyaman di layar kecil & tinggi pendek */
+@media (max-width: 640px) {
+  .modal { width: calc(100vw - 20px); max-height: min(92dvh, 900px); }
+  .modal--wide { width: calc(100vw - 20px); }
+}
+
+/* Header toko menumpuk rapi di layar sempit */
+@media (max-width: 760px) {
+  .shop-head__inner { flex-wrap: wrap; }
+  .shop-head__search { order: 3; flex-basis: 100%; max-width: none; }
+  .hero h1 { max-width: none; }
+}
+
+/* Layar lebar: manfaatkan ruang, jangan menyisakan kosong berlebih */
+@media (min-width: 1440px) {
+  .shell { max-width: min(calc(var(--shell, 1200px) + 360px), 96vw); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+}
+
+/* Portal: area kerja memanfaatkan lebar layar; tabel & panel boleh melebar */
+@media (min-width: 1440px) {
+  .portal__body { padding: var(--s-7) var(--s-7); }
+}
+.portal__main, .portal__body, .ticket, .pos__catalog { min-width: 0; }
+
+/* Portrait HP: POS & tiket menumpuk, tombol tetap terjangkau */
+@media (max-width: 860px) {
+  .ticket { max-height: none; }
+  .pos-item { min-height: 116px; }
+  .rail-nav__item { min-height: 44px; }
+}
+
+/* Landscape pendek (HP terbaring / tablet): kompresi vertikal supaya
+   tidak ada fitur yang terpotong di bawah. */
+@media (max-height: 560px) and (orientation: landscape) {
+  .hero { padding-top: var(--s-6); padding-bottom: var(--s-6); }
+  .hero__stats { gap: var(--s-5); }
+  .gate { padding: var(--s-4); }
+  .gate__card { padding: var(--s-5) var(--s-6); }
+  .gate__logo { width: 48px; height: 48px; margin-bottom: var(--s-3); }
+  .pin-display { margin: var(--s-3) 0 var(--s-4); }
+  .keypad__key { height: 46px; }
+  .modal { max-height: 96dvh; }
+  .modal__head { padding-top: 16px; padding-bottom: 10px; }
+  .modal__body { padding-bottom: 14px; }
+  .portal__top { padding-block: 8px; }
+}
+
+/* Aman di HP dengan notch/rounded: hormati safe area */
+@media (max-width: 900px) {
+  .app { padding-left: 0; padding-right: 0; }
+  .shell { padding-inline: max(var(--s-4), env(safe-area-inset-left)) max(var(--s-4), env(safe-area-inset-right)); }
+}
+
+/* Tombol besar saat dipakai sentuh */
+@media (pointer: coarse) {
+  .keypad__key, .pcard__add, .btn--icon { min-width: 44px; min-height: 44px; }
+}

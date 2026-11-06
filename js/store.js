@@ -191,10 +191,15 @@ const SEED_SETTINGS = {
   requireCustomerName: false,
 
   deliveryFee: 12000,
+  deliveryPerKm: 0,          // >0 → ongkir = jarak(km) × tarif ini
   deliveryRadiusKm: 12,
   storeLat: -6.9147,
   storeLng: 107.6098,
   storeAddressShort: 'Merdeka 12, Bandung',
+
+  storeLogo: '',             // data-URL logo toko (upload di Pengaturan)
+  qrisImage: '',             // data-URL foto QRIS statis (upload di Pengaturan)
+  couriers: '[]',            // JSON string [{ name, phone }] — sama seperti mode GAS
 
   portalPin: '258000',
   qrisMerchant: 'MYKASIR AQUATIC',
@@ -609,12 +614,14 @@ export function saveOrder(order) {
   commit();
 }
 
-export function updateOrderStatus(code, status) {
+export function updateOrderStatus(code, status, extra = {}) {
   const d = read();
   const o = d.orders.find((x) => x.code === code);
   if (!o) return null;
   o.status = status;
   if (status === 'paid' && !o.paidAt) o.paidAt = new Date().toISOString();
+  if (extra && extra.courier !== undefined) o.courier = extra.courier || '';
+  if (extra && extra.courierPhone !== undefined) o.courierPhone = extra.courierPhone || '';
   commit();
   return { ...o };
 }
