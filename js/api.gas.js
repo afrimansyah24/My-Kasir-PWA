@@ -702,6 +702,15 @@ export async function getPublicCatalogData() {
   return bundleSafe('getPublicCatalogData');
 }
 
+/**
+ * Kirim gambar ke backend, disimpan di Google Drive.
+ *
+ * Backend membalas { ok, fileId, url } atau { ok: false, error }.
+ */
+export async function uploadImageToDrive(dataUrl, filename = 'gambar') {
+  return safe('uploadImageToDrive', { dataUrl, filename });
+}
+
 export async function createOnlineOrder(payload) {
   return safe('createOnlineOrder', payload);
 }

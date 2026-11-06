@@ -7,7 +7,7 @@
 import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, uid, orderCode, modal, closeModal, copyText, emptyState,
-  compressForStorage,
+  compressForStorage, resolveImageSrc,
 } from '../util.js';
 import * as api from '../api.js';
 import * as cart from '../cart.js';
@@ -35,7 +35,7 @@ let state = {
 function brandMark(logo, fallbackIcon = 'store') {
   if (logo) {
     return h('span.brand__mark', { class: 'brand__mark--img' },
-      h('img', { src: logo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
+      h('img', { src: resolveImageSrc(logo), alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
     );
   }
   return h('span.brand__mark', null, icon(fallbackIcon));
@@ -51,8 +51,8 @@ function header(data) {
         h('a.brand', { href: withBase('/'), 'data-nav': 'home' },
           brandMark(data.store.logo),
           h('span', null,
-            data.store.name,
-            h('span.brand__sub', null, data.store.tagline)
+            data.store.name || 'Toko',
+            data.store.tagline ? h('span.brand__sub', null, data.store.tagline) : null
           )
         ),
 
@@ -320,28 +320,57 @@ function scheduleFreshListener() {
 
 function hero(data) {
   const online = state.onlineEnabled;
+  const store = data.store || {};
   const featured = data.products.filter((p) => p.available).slice(0, 4);
   const tiles = featured.length
     ? featured
-    : [{ image: '', name: data.store.name }];
+    : [{ image: '', name: store.name }];
+
+  /* --------------------------------------------------------------------
+     Teks hero come dari pengaturan (Portal > Pengaturan > Tampilan toko).
+     Bila kosong, dipakai teks BAWAAN yang generik — bukan contoh produk
+     tertentu — supaya aplikasi ini cocok untuk toko apa pun.
+     -------------------------------------------------------------------- */
+  const DEFAULT_TITLE = 'Belanja mudah,';
+  const DEFAULT_HIGHLIGHT = 'produk pilihan';
+  const DEFAULT_SUBTITLE = 'Pilih produk favorit Anda, tentukan pengiriman, dan lacak pesanan Anda dengan kode sederhana.';
+  const DEFAULT_BADGE = 'Belanja tanpa ribet, kirim hari ini';
+  const DEFAULT_CLOSED = 'Toko online sedang tutup';
+  const DEFAULT_CTA = 'Lihat katalog';
+  const DEFAULT_TRACK = 'Lacak pesanan';
+
+  const titleText = (store.heroTitle || '').trim() || DEFAULT_TITLE;
+  const highlightText = (store.heroTitleHighlight || '').trim() || DEFAULT_HIGHLIGHT;
+  const subtitleText = (store.heroSubtitle || '').trim()
+    || (store.name
+      ? `${store.name}${store.tagline ? ' — ' + store.tagline : ''}. ${DEFAULT_SUBTITLE}`
+      : DEFAULT_SUBTITLE);
+  const badgeText = (store.heroBadgeText || '').trim() || DEFAULT_BADGE;
+  const ctaText = (store.heroButtonText || '').trim() || DEFAULT_CTA;
+  const trackText = (store.heroTrackButtonText || '').trim() || DEFAULT_TRACK;
+  const showBadge = store.heroShowBadge !== false;
+  const showStats = store.heroShowStats !== false;
+
+  // Gambar banner pilihan owner; bila kosong, pakai foto produk (mosaik).
+  const banner = (store.heroImage || '').trim();
 
   return h('section.hero', null,
     h('div.shell', null,
       h('div.hero__inner', null,
         h('div', null,
-          h('div.hero__badge', null,
-            h('span.badge.badge--info', null, icon('sparkles'), 'Baru'),
-            h('span', null, online
-              ? 'Belanja tanpa ribet, kirim hari ini'
-              : 'Toko online sedang tutup')
-          ),
+          showBadge
+            ? h('div.hero__badge', null,
+                h('span.badge.badge--info', null, icon('sparkles'), 'Baru'),
+                h('span', null, online ? badgeText : DEFAULT_CLOSED)
+              )
+            : null,
           h('h1.t-display', null,
-            'Perlengkapan ', h('span.t-gradient', null, 'renang & olahraga'), ' terbaik untuk Anda.'
+            titleText, ' ', h('span.t-gradient', null, highlightText)
           ),
           h('p.hero__lead', null,
             online
-              ? `${data.store.name} — ${data.store.tagline}. Pilih produk, tentukan pengiriman, dan lacak pesanan Anda dengan kode sederhana.`
-              : `${data.store.name} — ${data.store.tagline}. Mohon maaf, toko online masih belum dibuka. Anda tetap bisa melacak pesanan yang sebelumnya dibuat.`
+              ? subtitleText
+              : `${store.name || 'Toko ini'}${store.tagline ? ' — ' + store.tagline : ''}. Mohon maaf, toko online masih belum dibuka. Anda tetap bisa melacak pesanan yang sebelumnya dibuat.`
           ),
           h('div.hero__actions', null,
             h('button.btn.btn--primary.btn--lg', {
@@ -350,32 +379,36 @@ function hero(data) {
               onclick: () => {
                 document.getElementById('katalog')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               },
-            }, icon('grid'), 'Lihat katalog'),
-            h('a.btn.btn--ghost.btn--lg', { href: withBase('/lacak'), 'data-nav': 'track' }, icon('navigation'), 'Lacak pesanan')
+            }, icon('grid'), ctaText),
+            h('a.btn.btn--ghost.btn--lg', { href: withBase('/lacak'), 'data-nav': 'track' }, icon('navigation'), trackText)
           ),
-          h('div.hero__stats', null,
-            h('div.hero__stat', null,
-              h('b', null, String(online ? data.products.length : 0)),
-              h('span', null, online ? 'produk tersedia' : 'produk tersedia saat toko online dibuka')
-            ),
-            h('div.hero__stat', null,
-              h('b', null, '10 menit'),
-              h('span', null, 'batas bayar QRIS')
-            ),
-            h('div.hero__stat', null,
-              h('b', null, rupiah(data.store.deliveryFee, { decimals: false }).replace('Rp', '')),
-              h('span', null, 'ongkir flat')
-            )
-          )
+          showStats
+            ? h('div.hero__stats', null,
+                h('div.hero__stat', null,
+                  h('b', null, String(online ? data.products.length : 0)),
+                  h('span', null, online ? 'produk tersedia' : 'produk tersedia saat toko online dibuka')
+                ),
+                h('div.hero__stat', null,
+                  h('b', null, '10 menit'),
+                  h('span', null, 'batas bayar QRIS')
+                ),
+                h('div.hero__stat', null,
+                  h('b', null, rupiah(store.deliveryFee, { decimals: false }).replace('Rp', '')),
+                  h('span', null, 'ongkir flat')
+                )
+              )
+            : null
         ),
 
         h('div.hero__art', { 'aria-hidden': 'true' },
           h('div.hero__glow'),
-          tiles.slice(0, 4).map((p, i) =>
-            h('div', { class: `hero__tile hero__tile--${i + 1}` },
-              p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : null
-            )
-          )
+          banner
+            ? h('img.hero__banner', { src: resolveImageSrc(banner), alt: '', loading: 'lazy' })
+            : tiles.slice(0, 4).map((p, i) =>
+                h('div', { class: `hero__tile hero__tile--${i + 1}` },
+                  p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : null
+                )
+              )
         )
       )
     )
@@ -1152,7 +1185,7 @@ function openCheckout() {
         //   2. Foto QRIS statis (unggahan owner) — nominal ditulis manual.
         //   3. Payload EMV buatan sendiri (merchant + nominal + CRC).
         const dynamicQris = order.qrisDynamic === '1' && order.qrisPayload;
-        const staticQris = data.store.qrisImage;
+        const staticQris = resolveImageSrc(data.store.qrisImage);
         const holder = h('div.qris__code');
 
         if (dynamicQris) {
@@ -1467,10 +1500,11 @@ function footer(data) {
         h('div', null,
           h('a.brand', { href: withBase('/') },
             brandMark(data.store.logo),
-            h('span', null, data.store.name)
+            h('span', null, data.store.name || 'Toko')
           ),
-          h('p.t-sm.mt-3', { style: { maxWidth: '34ch' } }, data.store.tagline),
-          h('p.t-sm.mt-3', null, data.store.address)
+          data.store.tagline ? h('p.t-sm.mt-3', { style: { maxWidth: '34ch' } }, data.store.tagline) : null,
+          data.store.address ? h('p.t-sm.mt-3', null, data.store.address) : null,
+          data.store.footerNote ? h('p.t-sm.mt-3', null, data.store.footerNote) : null
         ),
         h('div', null,
           h('div.foot__title', null, 'Belanja'),

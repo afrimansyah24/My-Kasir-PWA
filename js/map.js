@@ -82,8 +82,8 @@ export function isValidLatLng(lat, lng) {
  */
 export function createPickerMap(opts = {}) {
   const {
-    lat = -6.9147,
-    lng = 107.6098,
+    lat = null,
+    lng = null,
     zoom = 14,
     radiusKm = 0,
     height = 340,
@@ -91,9 +91,18 @@ export function createPickerMap(opts = {}) {
     onChange = null,
   } = opts;
 
-  // Koordinat tak sah -> pakai titik tengah Indonesia (Bandung).
-  const safeLat = isValidLatLng(lat, lng) ? Number(lat) : -6.9147;
-  const safeLng = isValidLatLng(lat, lng) ? Number(lng) : 107.6098;
+  // Koordinat tak sah/kosong -> pakai titik tengah Indonesia sebagai titik
+  // AWAL PETA SAJA (bukan lokasi toko yang disimpan).
+  //
+  // Titik awal ini hanya untuk menampilkan peta; begitu owner mengetuk peta,
+  // koordinat sebenarnya tersimpan. Nilai ini tidak pernah ditulis ke
+  // pengaturan sebagai lokasi toko.
+  const fallbackLat = -6.9147;   // Bandung — hanya titik tengah peta
+  const fallbackLng = 107.6098;
+  const safeLat = isValidLatLng(lat, lng) ? Number(lat) : fallbackLat;
+  const safeLng = isValidLatLng(lat, lng) ? Number(lng) : fallbackLng;
+  // Apakah titik awal ini milik toko, atau hanya placeholder peta?
+  const hasStorePoint = isValidLatLng(lat, lng);
 
   const el = h('div.map-picker', {
     style: { height: `${height}px`, position: 'relative', borderRadius: 'var(--r-lg)', overflow: 'hidden', border: '1px solid var(--line)' },
@@ -156,6 +165,21 @@ export function createPickerMap(opts = {}) {
     });
 
     overlay.remove();
+
+    // Bila lokasi toko belum pernah diatur, beri tahu pemilik agar tahu
+    // koordinat yang terlihat hanyalah titik tengah peta.
+    //
+    // Petanya tetap diklikable (pointer-events: none pada hint), jadi owner
+    // bisa langsung mengetuk peta untuk menetapkan lokasi.
+    if (!hasStorePoint) {
+      el.append(h('div.map-picker__hint', null,
+        h('div.callout.callout--warn', null,
+          icon('alert'),
+          'Lokasi toko belum diatur. Ketuk peta atau isi latitude/longitude di bawah untuk menetapkan lokasi toko.'
+        )
+      ));
+    }
+
     setTimeout(() => map.invalidateSize(), 120);
   };
 

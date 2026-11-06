@@ -520,3 +520,75 @@ export async function compressForStorage(file, { maxSize = 640, quality = 0.85, 
 export function isImageValue(v) {
   return typeof v === 'string' && v.startsWith('data:image/');
 }
+
+/* -------------------------------------------------------------------------
+   Sumber gambar: data-URL, Google Drive, atau URL biasa
+   --------------------------------------------------------------------------
+   Gambar hasil unggahan disimpan sebagai data-URL base64. Data-URL cukup
+   panjang (±45.000 karakter) sehingga TIDAK bisa dikirim lewat URL JSONP
+   — itu sebab unggahan besar gagal.
+
+   Solusinya: simpan gambar di Google Drive, lalu simpan HANYA kode file-nya
+   (kurang dari 40 karakter) di Spreadsheet. Kode ini diubah jadi URL
+   thumbnail saat ditampilkan.
+   ---------------------------------------------------------------------- */
+
+/** Ambil ID file Google Drive dari diverse bentuk input. */
+export function driveFileId(value) {
+  if (typeof value !== 'string') return '';
+  const v = value.trim();
+  if (!v) return '';
+
+  // https://drive.google.com/file/d/<ID>/view?usp=sharing
+  let m = v.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+
+  // https://drive.google.com/open?id=<ID>
+  m = v.match(/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+
+  // https://drive.google.com/uc?id=<ID>&export=view
+  m = v.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+  if (m) return m[1];
+
+  // https://lh3.googleusercontent.com/d/<ID>=w800
+  m = v.match(/googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+
+  // ID mentah (tanpa garis miring) — huruf/angka/garis bawah/minus.
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(v)) return v;
+
+  return '';
+}
+
+/**
+ * Ubah nilai gambar yang tersimpan menjadi URL yang bisa dimuat <img>.
+ *
+ * - data-URL  -> dipakai langsung
+ * - kode/URL Drive -> URL thumbnail Drive
+ * - URL lain  -> dipakai langsung
+ */
+export function resolveImageSrc(value) {
+  if (typeof value !== 'string') return '';
+  const v = value.trim();
+  if (!v) return '';
+
+  if (v.startsWith('data:image/')) return v;
+  if (/^https?:\/\//i.test(v) && !driveFileId(v)) return v;
+
+  const id = driveFileId(v);
+  if (id) {
+    return `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w800`;
+  }
+
+  return v;
+}
+
+/**
+ * Perkecil data-URL sampai muat di URL JSONP.
+ *
+ * Batas URL browser ±32.000 karakter. Base64 membesar ±33% saat
+ * di-URL-encode, jadi data-URL harus di bawah ±20.000 karakter agar
+ * permintaan tidak ditolak browser.
+ */
+export const JSONP_SAFE_MAX_CHARS = 16_000;

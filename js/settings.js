@@ -9,8 +9,15 @@
 
 import * as api from './api.js';
 
+/**
+ * Nilai cadangan saat server belum menjawab.
+ *
+ * Sengaja KOSONG untuk detail toko: aplikasi ini dipakai toko apa pun, bukan
+ * hanya satu toko. Tidak ada nama/alamat/koordinat contoh yang bisa
+ * tertinggal di layar bila owner belum mengatur apa pun.
+ */
 const FALLBACK = {
-  storeName: 'Toko Saya',
+  storeName: '',
   storeTagline: '',
   storeAddress: '',
   storePhone: '',
@@ -28,11 +35,22 @@ const FALLBACK = {
   deliveryFee: 0,
   deliveryPerKm: 0,
   deliveryRadiusKm: 0,
-  storeLat: -6.9147,
-  storeLng: 107.6098,
+  // Kosong = belum diatur (bukan titik kota tertentu).
+  storeLat: '',
+  storeLng: '',
   storeAddressShort: '',
   storeLogo: '',
   qrisImage: '',
+  heroTitle: '',
+  heroTitleHighlight: '',
+  heroSubtitle: '',
+  heroBadgeText: '',
+  heroButtonText: '',
+  heroTrackButtonText: '',
+  heroImage: '',
+  heroShowBadge: 'true',
+  heroShowStats: 'true',
+  footerNote: '',
   couriers: '[]',
   portalPin: '',
   qrisMerchant: '',

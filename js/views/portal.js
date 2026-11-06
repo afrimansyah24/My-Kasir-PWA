@@ -10,6 +10,7 @@ import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, initials, modal, confirmDialog, emptyState, copyText,
   fileToDataUrl, numberShort, compressForStorage, haversineKm,
+  driveFileId, resolveImageSrc, JSONP_SAFE_MAX_CHARS,
 } from '../util.js';
 import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
@@ -324,7 +325,7 @@ function portalShell(active = '') {
         h('a.brand', { href: withBase('/') },
           h('span.brand__mark', { class: 'brand__mark--img' },
             logo
-              ? h('img', { src: logo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
+              ? h('img', { src: resolveImageSrc(logo), alt: '', style: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' } })
               : icon('store')
           ),
           h('span', null, settings().storeName || 'My Kasir')
@@ -797,7 +798,7 @@ async function posView() {
           qrisBox.append(
             h('div', null,
               h('img', {
-                src: settings.qrisImage,
+                src: resolveImageSrc(settings.qrisImage),
                 alt: 'QRIS',
                 style: { width: '240px', maxWidth: '80%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)' },
               }),
@@ -2147,6 +2148,16 @@ async function settingsView() {
    * Berkas yang dipilih langsung tampil di preview, tetapi BARU ditulis ke
    * Spreadsheet setelah tombol "Simpan perubahan" ditekan.
    */
+  /**
+   * Baris pengaturan gambar.
+   *
+   * Tiga cara supplying gambar:
+   *   1. Unggah berkas  -> dikompres. Bila hasilnya masih terlalu besar
+   *      untuk dikirim lewat JSONP, otomatis dikirim ke Google Drive dan
+   *      yang disimpan di Spreadsheet hanya KODE FILE-nya.
+   *   2. Tempel kode file Google Drive (atau URL Drive) -> dipakai langsung.
+   *   3. Tempel URL gambar biasa -> dipakai langsung.
+   */
   const imageRow = (key, label, hint, { square = false, maxSize = 640 } = {}) => {
     const preview = h('div.img-preview', {
       style: square
@@ -2162,6 +2173,7 @@ async function settingsView() {
         preview.innerHTML = '';
         setDraft(key, '');
         removeBtn.style.display = 'none';
+        driveInput.value = '';
         toast(`${label} siap dihapus`, 'ok', 1600);
       },
     }, icon('close'), 'Hapus');
@@ -2170,7 +2182,7 @@ async function settingsView() {
       preview.innerHTML = '';
       const v = draft[key] || '';
       if (v) {
-        preview.append(h('img', { src: v, alt: label }));
+        preview.append(h('img', { src: resolveImageSrc(v), alt: label }));
         removeBtn.style.display = '';
       } else {
         removeBtn.style.display = 'none';
@@ -2179,14 +2191,71 @@ async function settingsView() {
 
     paint();
 
+    /* --- Kolom kode file Google Drive ---------------------------------- */
+    const driveInput = h('input.input', {
+      type: 'text',
+      placeholder: 'Kode file Google Drive (atau URL Drive)',
+      autocomplete: 'off',
+    });
+    driveInput.value = '';
+
+    const applyDrive = () => {
+      const raw = driveInput.value.trim();
+      if (!raw) return;
+      const id = driveFileId(raw);
+      if (!id) {
+        toast('Kode file Google Drive tidak dikenali', 'err');
+        return;
+      }
+      setDraft(key, id);
+      paint();
+      toast(`${label} memakai file Google Drive`, 'ok', 1600);
+    };
+    driveInput.addEventListener('change', applyDrive);
+
     const doUpload = async (file) => {
       if (!file) return;
       if (!/^image\//.test(file.type)) {
         toast('Berkas harus berupa gambar', 'err');
         return;
       }
+      const busy = toast('Mengunggah gambar…', 'info', 60000);
       try {
         const dataUrl = await compressForStorage(file, { maxSize });
+
+        // Kirim ke Google Drive bila data-URL terlalu besar untuk JSONP.
+        // Batas URL browser ±32.000 karakter; data-URL di-URL-encode jadi
+        // ±33% lebih panjang, jadi simpan batasnya di 16.000 karakter.
+        if (dataUrl.length > JSONP_SAFE_MAX_CHARS) {
+          const res = await api.uploadImageToDrive(dataUrl, `${key}-${Date.now()}`);
+          if (res && res.ok && res.fileId) {
+            setDraft(key, res.fileId);
+            paint();
+            toast(`${label} disimpan di Google Drive`, 'ok', 2200);
+            return;
+          }
+          // Backend gagal menyimpan, TAPI mungkin file sudah terlanjur
+          // dibuat (hanya berbagi gagal). Tampilkan kode filenya agar owner
+          // bisa membagikannya manual.
+          if (res && res.fileId) {
+            driveInput.value = res.fileId;
+            setDraft(key, res.fileId);
+            paint();
+            toast(res.error || 'Bagikan file ini manual di Google Drive', 'err', 7000);
+            return;
+          }
+          // Drive gagal -> tetap coba simpan lokal (kecilkan lagi).
+          const smaller = await compressForStorage(file, { maxSize: 320, quality: 0.6, maxBytes: 14_000 });
+          if (smaller.length <= JSONP_SAFE_MAX_CHARS) {
+            setDraft(key, smaller);
+            paint();
+            toast(`${label} siap disimpan`, 'ok', 1600);
+            return;
+          }
+          toast('Gambar terlalu besar. Tempel kode file Google Drive.', 'err', 4200);
+          return;
+        }
+
         setDraft(key, dataUrl);
         paint();
         toast(`${label} siap disimpan`, 'ok', 1600);
@@ -2207,6 +2276,26 @@ async function settingsView() {
           h('div.row.gap-2.mt-3', null,
             h('button.btn.btn--sm.btn--soft', { onclick: () => fileInput.click() }, icon('upload'), 'Pilih gambar'),
             removeBtn
+          ),
+          h('div.mt-3', null,
+            h('label.t-xs', null, 'Atau gunakan Google Drive'),
+            h('div.row.gap-2', { style: { alignItems: 'center' } },
+              h('div.grow', null, driveInput),
+              h('button.btn.btn--sm.btn--ghost', {
+                type: 'button',
+                onclick: applyDrive,
+              }, icon('check'), 'Pakai')
+            ),
+            h('div.field__hint', null,
+              'Cara mudah: unggah gambar ke Google Drive, klik kanan > Bagikan > ' +
+              'Siapa saja yang memiliki link > Viewer, lalu salin tautannya ' +
+              '(atau kode file di akhir URL) dan tempel di sini.'
+            ),
+            h('div.callout.mt-3', null,
+              icon('info'),
+              'Kode file Google Drive hanya kode file saja (bukan tautan penuh). ' +
+              'Contoh kode: 1AbCdEfGhIjKlMnOpQrStUvWxYz'
+            )
           )
         )
       ),
@@ -2380,16 +2469,32 @@ async function settingsView() {
 
       const initLat = readCoord(draft.storeLat, 90);
       const initLng = readCoord(draft.storeLng, 180);
-      const startLat = initLat ?? -6.9147;
+      // Bila lokasi belum pernah diatur, input dikosongkan — BUKAN diisi titik
+      // tengah peta. Kalau diisi, owner bisa saja tanpa sengaja menyimpan
+      // koordinat titik tengah peta sebagai lokasi toko.
+      const hasPoint = initLat !== null && initLng !== null;
+      const startLat = initLat ?? -6.9147;   // hanya titik awal peta
       const startLng = initLng ?? 107.6098;
       const initRadius = Number(draft.deliveryRadiusKm);
       const startRadius = Number.isFinite(initRadius) ? initRadius : 0;
 
-      const latInput = h('input.input', { type: 'number', value: startLat, step: 'any' });
-      const lngInput = h('input.input', { type: 'number', value: startLng, step: 'any' });
+      const latInput = h('input.input', {
+        type: 'number',
+        value: hasPoint ? initLat : '',
+        step: 'any',
+        placeholder: 'contoh: -6.9147',
+      });
+      const lngInput = h('input.input', {
+        type: 'number',
+        value: hasPoint ? initLng : '',
+        step: 'any',
+        placeholder: 'contoh: 107.6098',
+      });
       const radiusInput = h('input.input', { type: 'number', value: startRadius, step: '0.1', min: '0' });
       const coordLabel = h('div.t-xs', { style: { marginTop: '6px', opacity: '0.75' } });
-      coordLabel.textContent = `Titik toko: ${startLat.toFixed(6)}, ${startLng.toFixed(6)}`;
+      coordLabel.textContent = hasPoint
+        ? `Titik toko: ${initLat.toFixed(6)}, ${initLng.toFixed(6)}`
+        : 'Lokasi toko belum diatur — ketuk peta atau isi koordinat di bawah.';
 
       const picker = createPickerMap({
         lat: startLat,
@@ -2471,6 +2576,134 @@ async function settingsView() {
             h('div.callout.mt-4', null,
               icon('info'),
               'Peta memakai OpenStreetMap — gratis tanpa kunci API, bisa dipakai untuk produksi.'
+            )
+          )
+        )
+      );
+    } else if (tab === 'tampilan') {
+      /* --- Tampilan toko online ---------------------------------------- */
+      const titleInput = h('input.input', {
+        type: 'text',
+        value: draft.heroTitle || '',
+        placeholder: 'Belanja mudah,',
+      });
+      const highlightInput = h('input.input', {
+        type: 'text',
+        value: draft.heroTitleHighlight || '',
+        placeholder: 'produk pilihan',
+      });
+      const subtitleInput = h('textarea.input', {
+        rows: '3',
+        placeholder: 'Pilih produk favorit Anda, tentukan pengiriman, dan lacak pesanan Anda dengan kode sederhana.',
+      });
+      subtitleInput.value = draft.heroSubtitle || '';
+
+      const badgeInput = h('input.input', {
+        type: 'text',
+        value: draft.heroBadgeText || '',
+        placeholder: 'Belanja tanpa ribet, kirim hari ini',
+      });
+      const ctaInput = h('input.input', {
+        type: 'text',
+        value: draft.heroButtonText || '',
+        placeholder: 'Lihat katalog',
+      });
+      const trackInput = h('input.input', {
+        type: 'text',
+        value: draft.heroTrackButtonText || '',
+        placeholder: 'Lacak pesanan',
+      });
+      const footerInput = h('textarea.input', { rows: '2' });
+      footerInput.value = draft.footerNote || '';
+
+      titleInput.addEventListener('input', () => setDraft('heroTitle', titleInput.value));
+      highlightInput.addEventListener('input', () => setDraft('heroTitleHighlight', highlightInput.value));
+      subtitleInput.addEventListener('input', () => setDraft('heroSubtitle', subtitleInput.value));
+      badgeInput.addEventListener('input', () => setDraft('heroBadgeText', badgeInput.value));
+      ctaInput.addEventListener('input', () => setDraft('heroButtonText', ctaInput.value));
+      trackInput.addEventListener('input', () => setDraft('heroTrackButtonText', trackInput.value));
+      footerInput.addEventListener('input', () => setDraft('footerNote', footerInput.value));
+
+      const badgeToggle = h('input', { type: 'checkbox' });
+      badgeToggle.checked = String(draft.heroShowBadge ?? 'true') !== 'false';
+      badgeToggle.addEventListener('change', () => setDraft('heroShowBadge', badgeToggle.checked ? 'true' : 'false'));
+
+      const statsToggle = h('input', { type: 'checkbox' });
+      statsToggle.checked = String(draft.heroShowStats ?? 'true') !== 'false';
+      statsToggle.addEventListener('change', () => setDraft('heroShowStats', statsToggle.checked ? 'true' : 'false'));
+
+      host.append(
+        h('div.panel', null,
+          h('div.panel__head', null, h('h3.t-h3', null, 'Tampilan toko online')),
+          h('div.panel__body', null,
+            h('p.t-body.mb-4', null,
+              'Atur kalimat dan gambar yang tampil di bagian atas toko online. ' +
+              'Semua kolom opsional — yang dikosongkan memakai teks bawaan yang umum, sehingga toko ini ' +
+              'bukan terkunci ke satu jenis produk.'
+            ),
+
+            h('div.field', null,
+              h('label', null, 'Judul utama (bagian sebelum kata bergradien)'),
+              titleInput,
+              h('div.field__hint', null, 'Contoh: "Belanja mudah,"')
+            ),
+
+            h('div.field.mt-3', null,
+              h('label', null, 'Kata bergradien'),
+              highlightInput,
+              h('div.field__hint', null, 'Kata ini yang diberi warna gradien. Contoh: "produk pilihan"')
+            ),
+
+            h('div.field.mt-3', null,
+              h('label', null, 'Kalimat penjelasan'),
+              subtitleInput,
+              h('div.field__hint', null,
+                'Bila kosong, memakai nama toko + tagline Anda, lalu kalimat bawaan.')
+            ),
+
+            h('div.field.mt-3', null,
+              h('label', null, 'Teks kecil di atas judul'),
+              badgeInput
+            ),
+
+            h('div.row.gap-3.mt-3', null,
+              h('div.field.grow', null,
+                h('label', null, 'Teks tombol katalog'),
+                ctaInput
+              ),
+              h('div.field.grow', null,
+                h('label', null, 'Teks tombol lacak pesanan'),
+                trackInput
+              )
+            ),
+
+            h('div.divider'),
+
+            h('h4.t-h3', null, 'Gambar banner'),
+            h('p.t-body.mt-2.mb-4', null,
+              'Gambar besar di sisi kanan bagian atas. Bila kosong, aplikasi memakai foto-foto produk pilihan sebagai pengganti.'
+            ),
+
+            imageRow('heroImage', 'Banner toko online', 'Disarankan gambar landscape (mis. 1200×800 px).', { maxSize: 900 }),
+
+            h('div.divider'),
+
+            h('h4.t-h3', null, 'Elemen yang ditampilkan'),
+            h('div.row.gap-4.mt-3', null,
+              h('label.row.gap-2', { style: { cursor: 'pointer' } },
+                badgeToggle, h('span.t-sm', null, 'Tampilkan teks kecil (badge) di atas judul')
+              ),
+              h('label.row.gap-2', { style: { cursor: 'pointer' } },
+                statsToggle, h('span.t-sm', null, 'Tampilkan barisan ringkasan (jumlah produk, ongkir)')
+              )
+            ),
+
+            h('div.divider'),
+
+            h('div.field', null,
+              h('label', null, 'Catatan di footer'),
+              footerInput,
+              h('div.field__hint', null, 'Tampil di bagian bawah halaman toko online.')
             )
           )
         )
@@ -2890,6 +3123,7 @@ async function settingsView() {
   const tabs = [
     { key: 'umum', label: 'Umum', icon: 'settings' },
     { key: 'lokasi', label: 'Lokasi', icon: 'map' },
+    { key: 'tampilan', label: 'Tampilan toko', icon: 'layers' },
     { key: 'branding', label: 'Logo & QRIS', icon: 'image' },
     { key: 'kurir', label: 'Kurir', icon: 'truck' },
     { key: 'data', label: 'Data', icon: 'database' },

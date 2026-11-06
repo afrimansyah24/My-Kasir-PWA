@@ -65,4 +65,12 @@ export const bustCache = gas.bustCache;
  */
 export const prefetchPortal = gas.prefetchPortal;
 
+/**
+ * Simpan gambar ke Google Drive, kembalikan kode file-nya.
+ *
+ * Dipakai saat gambar terlalu besar untuk disimpan langsung di sel
+ * Spreadsheet (atau ketika unggahan biasa gagal).
+ */
+export const uploadImageToDrive = gas.uploadImageToDrive;
+
 export { uid } from './util.js';
