@@ -4,7 +4,6 @@ import { $, h, icon, toast, esc, clamp, rupiah } from './util.js';
 import * as api from './api.js';
 import * as store from './store.js';
 import { refreshSettings } from './settings.js';
-import { gasConfigHint } from './config.js';
 import { loadCart, subscribe as subscribeCart } from './cart.js';
 import { mountStorefront } from './views/storefront.js';
 import { mountPortal } from './views/portal.js';
@@ -289,30 +288,7 @@ export function toggleTheme() {
    Boot
    ---------------------------------------------------------------------- */
 
-function showBootError(message) {
-  const root = document.getElementById('app');
-  if (!root) return;
-  root.innerHTML = '';
-  root.append(
-    h('div.gate', null,
-      h('div.gate__card', null,
-        h('div.gate__logo', null, icon('alert')),
-        h('h1.t-h1', null, 'Konfigurasi backend'),
-        h('p.t-body.mt-2.gate__error', null, message),
-        h('p.t-sm.mt-3', null, 'Buka berkas js/config.js — GAS_URL = URL Web App (/exec). Spreadsheet ID hanya di Apps Script → Script properties (SPREADSHEET_ID).'),
-        h('button.btn.btn--primary.mt-5', { onclick: () => location.reload() }, 'Muat ulang')
-      )
-    )
-  );
-}
-
 function boot() {
-  const misconfig = gasConfigHint();
-  if (misconfig) {
-    showBootError(misconfig);
-    return;
-  }
-
   applyTheme(currentTheme());
   loadCart();
 
