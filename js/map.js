@@ -149,16 +149,22 @@ export function createPickerMap(opts = {}) {
       }).addTo(map);
     }
 
-    // Reference point is the fixed shop marker; the main marker is the
-    // draggable customer delivery point. Give them distinct icons so the
-    // customer can always tell which pin is the shop and which one to move.
+    // Titik acuan (lokasi toko) pada peta pelanggan: marker TETAP yang tidak
+    // bisa digeser, diberi pin merah berlabel TOKO.
+    //
+    // Pada peta pengaturan owner tidak ada titik acuan — marker utama justru
+    // adalah titik toko yang sedang disunting (lihat `isShopMarker` di
+    // bawah). Dua pin tidak boleh menumpuk di koordinat yang sama: kalau
+    // begitu, pin biru menutupi pin merah dan pemilik toko tidak pernah
+    // melihat penanda tokonya.
+    const shopIcon = L.divIcon({
+      className: 'my-kasir-map-pin my-kasir-map-pin--store',
+      html: '<span class="my-kasir-map-pin__dot"></span><span class="my-kasir-map-pin__label">TOKO</span>',
+      iconSize: [58, 30],
+      iconAnchor: [14, 15],
+    });
+
     if (referencePoint && isValidLatLng(referencePoint.lat, referencePoint.lng)) {
-      const shopIcon = L.divIcon({
-        className: 'my-kasir-map-pin my-kasir-map-pin--store',
-        html: '<span class="my-kasir-map-pin__dot"></span><span class="my-kasir-map-pin__label">TOKO</span>',
-        iconSize: [58, 30],
-        iconAnchor: [14, 15],
-      });
       referenceMarker = L.marker([Number(referencePoint.lat), Number(referencePoint.lng)], {
         icon: shopIcon,
         draggable: false,
@@ -171,20 +177,33 @@ export function createPickerMap(opts = {}) {
       }
     }
 
-    const destinationIcon = referencePoint
-      ? L.divIcon({
+    // PENTING: `icon` TIDAK BOLEH bernilai undefined.
+    //
+    // Leaflet memakai `Object.create(options.icon)` saat membuat marker. Bila
+    // `icon` undefined, objek ikon yang diwarisi jadi undefined, sehingga
+    // `createIcon()` melempar TypeError di tengah draw() -> peta gagal,
+    // marker tidak muncul, dan handler klik tidak pernah terpasang.
+    //
+    // Peta pengaturan owner (tanpa referencePoint) adalah kasus itu.
+    // Tanpa referencePoint (peta pengaturan owner) marker utama ADALAH titik
+    // toko -> pakai pin merah berlabel TOKO. Dengan referencePoint (peta
+    // pelanggan) marker utama adalah titik tujuan -> pin biru.
+    const isShopMarker = !referencePoint;
+
+    const destinationIcon = isShopMarker
+      ? shopIcon
+      : L.divIcon({
           className: 'my-kasir-map-pin my-kasir-map-pin--destination',
           html: '<span class="my-kasir-map-pin__dot"></span>',
           iconSize: [24, 24],
           iconAnchor: [12, 12],
-        })
-      : undefined;
+        });
 
     marker = L.marker([current.lat, current.lng], {
       icon: destinationIcon,
       draggable: allowDrag,
       autoPan: true,
-      title: referencePoint ? 'Lokasi pengantaran Anda' : 'Lokasi yang dipilih',
+      title: referencePoint ? 'Lokasi pengantaran Anda' : 'Lokasi toko',
     }).addTo(map);
 
     // Mulai tepat di lokasi toko dari Spreadsheet. Jika kedua pin berimpit
@@ -252,7 +271,16 @@ export function createPickerMap(opts = {}) {
       current = { lat: la, lng: ln };
       if (marker) marker.setLatLng([la, ln]);
       if (circle) circle.setLatLng([la, ln]);
-      if (map) map.setView([la, ln], map.getZoom());
+      // Pandangan peta TIDAK ikut digeser saat koordinat diketik. Owner
+      // mengetik latitude/longitude dan tiba-tiba pandangannya melompat —
+      // membuat sukar membandingkan titik lama & baru. Tampilan mengikuti
+      // titik HANYA bila titik itu keluar dari area pandang saat ini.
+      if (map && map.getBounds) {
+        const bounds = map.getBounds();
+        if (bounds && !bounds.contains([la, ln])) {
+          map.setView([la, ln], map.getZoom());
+        }
+      }
     },
     /** Ubah radius layanan (km). */
     setRadius(km) {

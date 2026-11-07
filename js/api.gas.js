@@ -97,14 +97,19 @@ const PERSIST_MAX_AGE = {
   getSettings: 10 * 60_000,             // pengaturan: 10 menit
   getDashboardData: 60 * 60_000,        // ringkasan: 1 jam (lalu revalidate)
   getTransactions: 30 * 60_000,         // daftar transaksi: 30 menit
-  getPublicCatalogData: 12 * 60 * 60_000,
-  getCategories: 12 * 60 * 60_000,
-  getProducts: 12 * 60 * 60_000,
+  // Katalog publik: 30 menit, BUKAN 12 jam.
+  //
+  // Data katalog publik memuat koordinat toko. Kalau snapshot ini bertahan
+  // 12 jam di perangkat pelanggan, peta delivery menampilkan lokasi toko
+  // LAMA selama itu — padahal owner sudah memindahkan tokonya.
+  getPublicCatalogData: 30 * 60_000,
+  getCategories: 30 * 60_000,
+  getProducts: 30 * 60_000,
   // Antrean & pesanan: 2 menit. Cukup untuk tampil instan, tapi tetap
   // direvalidasi supaya kasir melihat perubahan status dalam hitungan detik.
   getQueue: 2 * 60_000,
   getOnlineOrders: 2 * 60_000,
-  getUsers: 12 * 60 * 60_000,
+  getUsers: 30 * 60_000,
 };
 
 /** Batas ukuran agar localStorage tidak meledak (base64 gambar produk). */

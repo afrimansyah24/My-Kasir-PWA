@@ -271,18 +271,31 @@ function onFreshData(detail) {
     const nextQrisPickup = value.qrisPickupEnabled === undefined ? true : !!value.qrisPickupEnabled;
     const nextQrisDelivery = value.qrisDeliveryEnabled === undefined ? true : !!value.qrisDeliveryEnabled;
     const cur = state.data.features || {};
+    const nextLat = normalizeCoordinate(value.storeLat, 'lat');
+    const nextLng = normalizeCoordinate(value.storeLng, 'lng');
     const changed =
       nextOnline !== state.onlineEnabled ||
       nextQrisPickup !== (cur.qrisPickup !== false) ||
       nextQrisDelivery !== (cur.qrisDelivery !== false) ||
       value.storeName !== state.data.store.name ||
       (value.storeLogo || '') !== (state.data.store.logo || '') ||
-      (value.storeTagline || '') !== (state.data.store.tagline || '');
+      (value.storeTagline || '') !== (state.data.store.tagline || '') ||
+      // Lokasi toko berpindah -> peta pengiriman harus ikut ke titik baru.
+      nextLat !== normalizeCoordinate(state.data.store.lat, 'lat') ||
+      nextLng !== normalizeCoordinate(state.data.store.lng, 'lng');
     if (!changed) return;
 
+    // Koordinat punya nama berbeda di dua tempat: pengaturan memakai
+    // `storeLat`/`storeLng`, sedangkan data toko & peta memakai `lat`/`lng`.
+    // Tanpa pemetaan ini, peta pelanggan tetap memakai koordinat LAMA
+    // setelah pemilik toko memindahkan lokasi tokonya.
     const merged = {
       ...state.data,
-      store: { ...state.data.store, ...value },
+      store: {
+        ...state.data.store,
+        ...value,
+        ...(nextLat !== null && nextLng !== null ? { lat: nextLat, lng: nextLng } : {}),
+      },
       features: {
         ...(state.data.features || {}),
         onlineOrder: nextOnline,
@@ -900,6 +913,9 @@ function openCheckout() {
   const qrisDeliveryAllowed = feat.qrisDelivery !== false;
   const qrisAllowedFor = (kind) => (kind === 'delivery' ? qrisDeliveryAllowed : qrisPickupAllowed);
 
+  /** Dipasang dari dalam modal; dipanggil lewat onClose di bawah. */
+  let checkoutOnClose = null;
+
   modal((close) => {
     const wrap = h('div');
     const steps = h('div.steps', null,
@@ -955,6 +971,13 @@ function openCheckout() {
     let picker = null;
     let dest = { lat: null, lng: null };
 
+    const teardownPicker = () => {
+      if (picker) {
+        picker.destroy();
+        picker = null;
+      }
+    };
+
     const deliveryOpt = h('button.pick__opt', {
       type: 'button',
       onclick: () => { fulfilment = 'delivery'; syncPick(); },
@@ -989,12 +1012,12 @@ function openCheckout() {
           && normalizeCoordinate(st.lng, 'lng') !== null;
         const hadError = !!mapHolder.querySelector('.callout--warn');
         if (!picker || (hadError && hasCoords)) {
+          teardownPicker();
           mapHolder.innerHTML = '';
-          picker = null;
           mountDeliveryMap();
         }
       } else {
-        picker = null;
+        teardownPicker();
       }
 
       updateTotals();
@@ -1035,6 +1058,9 @@ function openCheckout() {
       };
       const updateMapInfo = () => { mapInfo.textContent = info(); };
 
+      mapStoreLat = storeLat;
+      mapStoreLng = storeLng;
+
       picker = createPickerMap({
         lat: storeLat,
         lng: storeLng,
@@ -1070,9 +1096,58 @@ function openCheckout() {
     const totalsHost = h('div.sum.mt-5');
     const summaryHost = h('div', { style: { marginBottom: 'var(--s-5)' } });
 
+    // Koordinat toko yang dipakai untuk MEMBANGUN peta saat ini. Disimpan
+    // terpisah karena state.data.store bisa saja sudah diperbarui oleh
+    // onFreshData sebelum handler ini jalan — jadi tidak boleh dipakai
+    // untuk membandingkan "peta lama vs peta baru".
+    let mapStoreLat = null;
+    let mapStoreLng = null;
+
+    // Owner memindahkan lokasi toko -> peta delivery yang SEDANG terbuka harus
+    // ikut ke titik baru (dan ongkir dihitung ulang), bukan tetap di koordinat
+    // lama sampai pelanggan menutup & membuka ulang keranjang.
+    const onStoreLocationChanged = (e) => {
+      const { action, value } = e?.detail || {};
+      if (action !== 'getSettings' && action !== 'getPublicCatalogData') return;
+      if (!value || typeof value !== 'object') return;
+
+      // Tiga sumber koordinat:
+      //   - pengaturan   : storeLat / storeLng (top-level)
+      //   - katalog publik: store.lat / store.lng (di dalam object store)
+      // Ambil yang tersedia.
+      const src = value.store && typeof value.store === 'object' ? value.store : value;
+      const rawLat = src.storeLat !== undefined ? src.storeLat : src.lat;
+      const rawLng = src.storeLng !== undefined ? src.storeLng : src.lng;
+      const lat = normalizeCoordinate(rawLat, 'lat');
+      const lng = normalizeCoordinate(rawLng, 'lng');
+      if (lat === null || lng === null) return;
+
+      // Sudah di titik yang sama -> peta tidak perlu dibangun ulang.
+      if (mapStoreLat === lat && mapStoreLng === lng) return;
+
+      mapStoreLat = lat;
+      mapStoreLng = lng;
+      teardownPicker();
+      mapHolder.innerHTML = '';
+      mountDeliveryMap();
+      updateTotals();
+    };
+    window.addEventListener('mykasir:fresh', onStoreLocationChanged);
+
+    const teardownCheckout = () => {
+      window.removeEventListener('mykasir:fresh', onStoreLocationChanged);
+      teardownPicker();
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    checkoutOnClose = teardownCheckout;
+
     function updateTotals() {
       const c = cart.cart();
-      const perKm = Number(data.store.deliveryPerKm) || 0;
+      // Baca dari state TERKINI: tarif ongkir owner bisa berubah kapan saja.
+      const perKm = Number(storeBundle().deliveryPerKm) || 0;
       const km = cart.destinationKm();
 
       totalsHost.innerHTML = '';
@@ -1450,7 +1525,7 @@ function openCheckout() {
       bodyHost,
       foot
     );
-  }, { tall: true });
+  }, { tall: true, onClose: () => checkoutOnClose?.() });
 }
 
 /* -------------------------------------------------------------------------

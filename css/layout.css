@@ -1789,10 +1789,19 @@
   box-shadow: var(--sh-2);
 }
 
-/* Marker peta checkout: pin toko merah berlabel TOKO, pin tujuan biru. */
+/* Marker peta: pin toko merah berlabel TOKO, pin tujuan biru.
+ *
+ * Catatan penting: `.my-kasir-map-pin` adalah elemen divIcon Leaflet, jadi
+ * posisinya `absolute` (dari .leaflet-marker-icon). Label "TOKO" memakai
+ * `position: absolute` relatif terhadap pin itu. Kalau dua pin berada di
+ * koordinat yang sama, label & dot saling menutupi -> pemilik toko
+ * tidak pernah melihat penanda tokonya.
+ */
 .my-kasir-map-pin {
   background: transparent;
   border: 0;
+  /* Label diposisikan relatif terhadap pin; biarkan melebar mengikuti isi. */
+  width: auto !important;
 }
 .my-kasir-map-pin__dot {
   display: block;
@@ -1810,14 +1819,15 @@
 }
 .my-kasir-map-pin__label {
   position: absolute;
-  left: 26px;
-  top: 2px;
+  left: 28px;
+  top: 3px;
   padding: 3px 7px;
   border-radius: var(--r-pill);
   color: #fff;
   background: var(--coral);
   font: 800 9px/1.2 var(--font);
   letter-spacing: .04em;
+  white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
 }
 

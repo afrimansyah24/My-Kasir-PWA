@@ -282,10 +282,45 @@ function render() {
 
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
+
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((err) => {
-      console.warn('Service worker gagal didaftarkan', err);
-    });
+    navigator.serviceWorker.register('./sw.js')
+      .then((reg) => {
+        const onNewWorker = (worker) => {
+          worker.addEventListener('statechange', () => {
+            if (worker.state !== 'installed') return;
+            if (!navigator.serviceWorker.controller) return;
+            try {
+              toast('Versi baru My Kasir — memuat ulang…', 'ok');
+            } catch {
+              /* toast belum siap */
+            }
+            worker.postMessage({ type: 'SKIP_WAITING' });
+          });
+        };
+
+        if (reg.waiting) onNewWorker(reg.waiting);
+        reg.addEventListener('updatefound', () => {
+          const worker = reg.installing;
+          if (worker) onNewWorker(worker);
+        });
+
+        // Cek pembaruan saat tab kembali fokus (deploy GitHub Pages sering terlewat).
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+        setInterval(() => reg.update().catch(() => {}), 30 * 60_000);
+      })
+      .catch((err) => {
+        console.warn('Service worker gagal didaftarkan', err);
+      });
   });
 }
 

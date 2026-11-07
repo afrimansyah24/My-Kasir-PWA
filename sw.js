@@ -2,11 +2,12 @@
  *
  * Strategy:
  *   navigations  -> network first (so a fresh deploy is picked up), cache fallback
+ *   ui bundles   -> network first (portal/layout tidak boleh basi setelah deploy)
  *   static assets-> stale-while-revalidate (instant offline, updates in background)
  *   map tiles    -> network first with cache fallback
  */
 
-const VERSION = 'mykasir-v1.13.1';
+const VERSION = 'mykasir-v1.14.0';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
@@ -67,6 +68,12 @@ self.addEventListener('install', (event) => {
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
@@ -81,6 +88,30 @@ self.addEventListener('activate', (event) => {
       .then(() => self.clients.claim())
   );
 });
+
+
+/** Jalur kritis UI: setelah deploy, jangan layani JS/CSS lama dulu. */
+function networkFirstAsset(req) {
+  return fetch(req)
+    .then((res) => {
+      if (res && res.status === 200 && res.type === 'basic') {
+        const copy = res.clone();
+        caches.open(SHELL).then((c) => c.put(req, copy));
+      }
+      return res;
+    })
+    .catch(() => caches.match(req));
+}
+
+function mustNetworkFirst(pathname) {
+  return (
+    pathname.endsWith('/sw.js') ||
+    pathname.endsWith('/js/app.js') ||
+    pathname.includes('/js/views/') ||
+    pathname.endsWith('/css/layout.css') ||
+    pathname.endsWith('/css/components.css')
+  );
+}
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -143,6 +174,11 @@ self.addEventListener('fetch', (event) => {
           })
           .catch(() => caches.match(req))
       );
+      return;
+    }
+
+    if (mustNetworkFirst(url.pathname)) {
+      event.respondWith(networkFirstAsset(req));
       return;
     }
 
