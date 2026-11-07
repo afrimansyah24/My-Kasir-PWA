@@ -1095,16 +1095,9 @@ async function ordersView() {
 
   // Daftar kurir untuk dipilih kasir.
   //
-  // Sumber utama: AKUN kurir (tabel Users) — supaya pesanan yang dipilih
-  // benar-benar muncul di portal kurir itu. Daftar lama di Pengaturan →
-  // Kurir tetap dipakai sebagai cadangan untuk kurir tanpa akun.
-  let couriers = [];
-  try {
-    const raw = settingsNow?.couriers;
-    couriers = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
-    if (!Array.isArray(couriers)) couriers = [];
-  } catch { couriers = []; }
-
+  // Sumber tunggal: AKUN kurir di menu Pengguna (tabel Users). Kurir dibuat
+  // sebagai akun di sana — sekalian jadi login portal — sehingga pesanan
+  // yang dipilih kasir benar-benar muncul di portal kurir itu.
   let courierAccounts = [];
   try {
     const users = await api.getUsers();
@@ -1205,39 +1198,18 @@ async function ordersView() {
           h('span', null, c.phone || 'Tanpa nomor')
         );
 
-      const legacyRow = (c) =>
-        h('button.pick__opt', {
-          type: 'button',
-          onclick: () => {
-            pickedId = '';
-            nameInput.value = c.name || '';
-            phoneInput.value = c.phone || '';
-          },
-        },
-          icon('truck'),
-          h('b', null, c.name),
-          h('span', null, c.phone || 'Tanpa nomor')
-        );
-
       let preset;
       if (courierAccounts.length) {
         preset = h('div.col.gap-2.mb-4', null,
           h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih akun kurir'),
-          courierAccounts.map(accountRow),
-          couriers.length
-            ? h('div.t-xs', { style: { fontWeight: '600', marginTop: '10px' } }, 'Kurir tanpa akun')
-            : null,
-          couriers.map(legacyRow)
-        );
-      } else if (couriers.length) {
-        preset = h('div.col.gap-2.mb-4', null,
-          h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih dari daftar kurir'),
-          couriers.map(legacyRow)
+          courierAccounts.map(accountRow)
         );
       } else {
         preset = h('div.callout.callout--warn.mb-4', null,
           icon('info'),
-          'Belum ada akun kurir. Owner bisa menambahkannya di Pengguna. Isi manual bila perlu.'
+          'Belum ada akun kurir. Owner bisa menambahkannya di menu Pengguna.',
+          h('br'),
+          'Sampai itu ada, isi nama kurir manual di bawah.'
         );
       }
 
@@ -2847,79 +2819,6 @@ async function settingsView() {
     );
   };
 
-  /**
-   * Daftar kurir (dipakai kasir saat menugaskan kurir).
-   * Disimpan sebagai JSON string agar cocok dengan sheet Settings.
-   */
-  const courierRow = () => {
-    let list = [];
-    try {
-      const raw = draft.couriers;
-      list = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
-      if (!Array.isArray(list)) list = [];
-    } catch { list = []; }
-
-    const listHost = h('div.col.gap-2');
-    const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
-    const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon (mis. 0812-3456-7890)' });
-
-    const syncDraft = () => {
-      setDraft('couriers', JSON.stringify(list));
-    };
-
-    const renderList = () => {
-      listHost.innerHTML = '';
-      if (!list.length) {
-        listHost.append(h('div.t-xs', { style: { opacity: '0.7' } }, 'Belum ada kurir. Tambahkan minimal satu agar kasir bisa menugaskan kurir.'));
-        return;
-      }
-      list.forEach((c, i) => {
-        listHost.append(
-          h('div.list-row', null,
-            h('div.avatar', null, icon('truck')),
-            h('div.grow', null,
-              h('div', { style: { fontSize: '13.5px', fontWeight: '600' } }, c.name),
-              h('div.t-xs', null, c.phone || 'Tanpa nomor telepon')
-            ),
-            h('button.btn.btn--sm.btn--icon.btn--ghost', {
-              'aria-label': 'Hapus kurir',
-              onclick: () => {
-                list.splice(i, 1);
-                syncDraft();
-                renderList();
-              },
-            }, icon('close'))
-          )
-        );
-      });
-    };
-
-    const add = () => {
-      const name = nameInput.value.trim();
-      const phone = phoneInput.value.trim();
-      if (!name) {
-        toast('Nama kurir wajib diisi', 'warn');
-        return;
-      }
-      list.push({ name, phone });
-      nameInput.value = '';
-      phoneInput.value = '';
-      syncDraft();
-      renderList();
-    };
-
-    renderList();
-
-    return h('div', null,
-      listHost,
-      h('div.row.gap-2.mt-3', null,
-        h('div.grow', null, nameInput),
-        h('div.grow', null, phoneInput)
-      ),
-      h('button.btn.btn--sm.btn--soft.mt-3', { onclick: add }, icon('plus'), 'Tambah kurir')
-    );
-  };
-
   const render = () => {
     host.innerHTML = '';
 
@@ -3432,18 +3331,6 @@ async function settingsView() {
           )
         )
       );
-    } else if (tab === 'kurir') {
-      host.append(
-        h('div.panel', null,
-          h('div.panel__head', null, h('h3.t-h3', null, 'Daftar kurir')),
-          h('div.panel__body', null,
-            h('p.t-body.mb-4', null,
-              'Kasir memilih salah satu kurir saat menandai pesanan delivery "diantar". Nama dan nomor telepon kurir langsung terlihat oleh pelanggan di halaman lacak pesanan.'
-            ),
-            courierRow()
-          )
-        )
-      );
     } else if (tab === 'data') {
       /* --- Panel hubungkan Spreadsheet -------------------------------- */
       const gasInput = h('input.input', {
@@ -3698,7 +3585,6 @@ async function settingsView() {
     { key: 'lokasi', label: 'Lokasi', icon: 'map' },
     { key: 'tampilan', label: 'Tampilan toko', icon: 'layers' },
     { key: 'branding', label: 'Logo & QRIS', icon: 'image' },
-    { key: 'kurir', label: 'Kurir', icon: 'truck' },
     { key: 'data', label: 'Data', icon: 'database' },
   ];
 

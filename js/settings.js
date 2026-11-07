@@ -67,7 +67,6 @@ const FALLBACK = {
   heroTile4Image: '',
   heroTile4Label: '',
   footerNote: '',
-  couriers: '[]',
   portalPin: '',
   qrisMerchant: '',
   qrisNmid: '',
