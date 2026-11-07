@@ -656,23 +656,42 @@ export function resolveImageSrc(value) {
  */
 export const JSONP_SAFE_MAX_CHARS = 16_000;
 
-/** Link WhatsApp (nomor Indonesia: 08xx -> 62xx). */
+/**
+ * Link WhatsApp.
+ *
+ * Nomor Indonesia bisa ditulis "0812…", "+62812…", atau "62812…".
+ * Semua dinormalisasi ke format wa.me (62xx tanpa "+").
+ */
 export function whatsappHref(phone, text = '') {
   const raw = String(phone || '').trim();
   if (!raw) return '';
-  let digits = raw.replace(/[^0-9+]/g, '').replace(/^\+/, '');
+  let digits = raw.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  // 08xx -> 62xx (kode negara Indonesia)
   if (digits.startsWith('0')) digits = '62' + digits.slice(1);
+  // 812… -> 62812… (kode negara Indonesia)
+  else if (digits.startsWith('8') && digits.length >= 9 && digits.length <= 13) {
+    digits = '62' + digits;
+  }
   if (!digits) return '';
   const base = 'https://wa.me/' + digits;
   if (!text) return base;
   return base + '?text=' + encodeURIComponent(text);
 }
 
-/** Buka lokasi di Google Maps (koordinat lebih dulu, lalu alamat). */
+/**
+ * Buka lokasi di Google Maps.
+ *
+ * Koordinat selalu dinormalisasi dulu: nilai yang tersimpan di Spreadsheet
+ * bisa kehilangan titik desimal (-7.10299514099999 -> -7102995140999990).
+ * Tanpa normalisasi, Google Maps tidak mengenali titik itu.
+ *
+ * Fallback ke pencarian alamat HANYA bila koordinat benar-benar tidak ada.
+ */
 export function mapsHref(lat, lng, address = '') {
-  const la = Number(lat);
-  const ln = Number(lng);
-  if (Number.isFinite(la) && Number.isFinite(ln)) {
+  const la = normalizeCoordinate(lat, 'lat');
+  const ln = normalizeCoordinate(lng, 'lng');
+  if (la !== null && ln !== null) {
     return 'https://www.google.com/maps?q=' + la + ',' + ln;
   }
   const addr = String(address || '').trim();

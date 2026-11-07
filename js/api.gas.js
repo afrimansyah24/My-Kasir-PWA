@@ -210,7 +210,7 @@ const WRITE_ACTIONS = new Set([
   'saveCategoryRecord', 'deleteCategoryRecord',
   'saveUserRecord', 'deleteUserRecord',
   'saveSettings', 'deleteTransactionRecord',
-  'setOrderStatus', 'assignCourier', 'setQueueEntryStatus', 'adjustStockRecord',
+  'setOrderStatus', 'assignCourier', 'savePaymentProof', 'confirmPayment', 'rejectPaymentProof', 'setQueueEntryStatus', 'adjustStockRecord',
   'saveTransaction', 'createOnlineOrder', 'payOrder',
   'setupDatabase', 'resetDemoData', 'importDatabase',
 ]);
@@ -815,6 +815,18 @@ export async function deleteTransactionRecord(id) {
 
 export async function assignCourier(code, courier, courierPhone, courierId) {
   return safe('assignCourier', { code, courier, courierPhone, courierId });
+}
+
+export async function savePaymentProof(code, fileId, note = '') {
+  return safe('savePaymentProof', { code, fileId, note });
+}
+
+export async function confirmPayment(code, cashier = '', note = '') {
+  return safe('confirmPayment', { code, cashier, note });
+}
+
+export async function rejectPaymentProof(code, note = '') {
+  return safe('rejectPaymentProof', { code, note });
 }
 
 export async function getCourierOrders(courierId) {

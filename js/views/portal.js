@@ -294,7 +294,28 @@ function loginGate() {
       'aria-label': 'Kata sandi',
     });
 
+    // Tombol Masuk + spinner, sama seperti saat memeriksa PIN: pengguna
+    // tahu permintaannya sedang diproses, bukan macet.
+    //
+    // Tombol dibuat dulu, lalu diisi onclick-nya setelah `submit` ada —
+    // deklarasi `const` tidak bisa dipakai sebelum diinisialisasi.
+    const loginBtn = h('button.btn.btn--primary.btn--lg.grow.mt-4', null, icon('login'), 'Masuk');
+    const loginBusy = h('div.gate__busy.hidden', null,
+      h('span.spinner'),
+      h('span', null, 'Memeriksa akun…')
+    );
+
+    let loginBusyState = false;
+    function setLoginBusy(on) {
+      loginBusyState = !!on;
+      loginBusy.classList.toggle('hidden', !on);
+      loginBtn.classList.toggle('hidden', !!on);
+      userInput.disabled = !!on;
+      passInput.disabled = !!on;
+    }
+
     const submit = async () => {
+      if (loginBusyState) return;
       const username = userInput.value.trim();
       const password = passInput.value;
       if (!username || !password) {
@@ -302,23 +323,31 @@ function loginGate() {
         return;
       }
       error.textContent = '';
-      const res = await api.login(username, password);
-      if (!res || !res.ok) {
-        error.textContent = (res && res.error) || 'Gagal masuk';
-        return;
+      setLoginBusy(true);
+      try {
+        const res = await api.login(username, password);
+        if (!res || !res.ok) {
+          error.textContent = (res && res.error) || 'Gagal masuk';
+          return;
+        }
+        const user = res.user || {};
+        if (user.role !== role) {
+          error.textContent = `Akun ini bukan akun ${ROLE_LABEL_[role] || role}.`;
+          return;
+        }
+        session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id, phone: user.phone || '' };
+        const app = document.getElementById('app');
+        app.innerHTML = '';
+        app.append(portalShell(''));
+        toast(`Selamat datang, ${session.name}`, 'ok');
+      } catch (err) {
+        error.textContent = (err && err.message) || 'Gagal masuk';
+      } finally {
+        setLoginBusy(false);
       }
-      const user = res.user || {};
-      if (user.role !== role) {
-        error.textContent = `Akun ini bukan akun ${ROLE_LABEL_[role] || role}.`;
-        return;
-      }
-      session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id, phone: user.phone || '' };
-      const app = document.getElementById('app');
-      app.innerHTML = '';
-      app.append(portalShell(''));
-      toast(`Selamat datang, ${session.name}`, 'ok');
     };
 
+    loginBtn.addEventListener('click', submit);
     userInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') passInput.focus(); });
     passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 
@@ -333,7 +362,8 @@ function loginGate() {
         h('div.field.mt-3', null, h('label', null, 'Kata sandi'), passInput)
       ),
       error,
-      h('button.btn.btn--primary.btn--lg.grow.mt-4', { onclick: submit }, icon('login'), 'Masuk'),
+      loginBtn,
+      loginBusy,
       h('div.row.gap-2.mt-4', null,
         h('button.btn.btn--ghost.btn--sm.grow', {
           onclick: () => { step = 'role'; paint(); },
@@ -1127,12 +1157,93 @@ async function ordersView() {
 
   const badgeFor = (o) => {
     if (o.status === 'cancelled') return h('span.badge.badge--err', null, 'Kedaluwarsa');
+    if (o.payment === 'Cash') return h('span.badge.badge--warn', null, 'COD');
+    // QRIS: bukti sudah diunggah tapi belum dikonfirmasi kasir.
+    if (o.proofImage && o.paymentStatus !== 'paid') {
+      return h('span.badge.badge--warn', null, 'Cek bukti bayar');
+    }
     if (o.status === 'pending') return h('span.badge.badge--warn', null, 'Menunggu bayar');
     if (o.status === 'paid') return h('span.badge.badge--info', null, 'Terbayar');
     if (o.status === 'preparing') return h('span.badge.badge--violet', null, 'Diproses');
     if (o.status === 'delivering') return h('span.badge.badge--info', null, 'Diantar');
     if (o.status === 'delivered') return h('span.badge.badge--ok', null, 'Selesai');
     return h('span.badge.badge--ok', null, 'Siap');
+  };
+
+  /**
+   * Sumber gambar bukti pembayaran.
+   *
+   * Bukti yang diunggah sebagai kode file Drive perlu diubah jadi URL
+   * thumbnail. Data-URL (bukti kecil) dipakai langsung.
+   */
+  const proofSrc = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    if (v.startsWith('data:image/')) return v;
+    return resolveImageSrc(v);
+  };
+
+  /**
+   * Modal: kasir memeriksa bukti pembayaran.
+   *
+   * Dua keputusan: konfirmasi (pembayaran masuk & sesuai -> pesanan boleh
+   * diproses) atau tolak (bukti tidak jelas -> pelanggan mengunggah ulang).
+   */
+  const reviewProof = (o) => {
+    modal((close) => {
+      const src = proofSrc(o.proofImage);
+      const noteInput = h('input.input', { type: 'text', placeholder: 'Catatan (opsional)' });
+
+      const confirm = async () => {
+        const res = await api.confirmPayment(o.code, session?.name || 'Kasir', noteInput.value.trim());
+        if (!res || res.ok === false) {
+          toast(res?.error || 'Gagal mengonfirmasi pembayaran', 'err');
+          return;
+        }
+        toast('Pembayaran dikonfirmasi — pesanan siap diproses', 'ok');
+        close();
+        refresh();
+      };
+
+      const reject = async () => {
+        const note = noteInput.value.trim();
+        const res = await api.rejectPaymentProof(o.code, note);
+        if (!res || res.ok === false) {
+          toast(res?.error || 'Gagal menolak bukti', 'err');
+          return;
+        }
+        toast('Bukti ditolak — pelanggan diminta mengunggah ulang', 'info');
+        close();
+        refresh();
+      };
+
+      return h('div', null,
+        h('div.modal__head', null,
+          h('div.grow', null,
+            h('h3.t-h2', null, 'Cek bukti pembayaran'),
+            h('p.t-body', { style: { marginTop: '4px' } },
+              `Pesanan ${o.code} · ${o.customer || 'pelanggan'} · ${rupiah(o.total)}`)
+          ),
+          h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+        ),
+        h('div.modal__body', null,
+          src
+            ? h('div.proof-view', null, h('img', { src, alt: 'Bukti pembayaran' }))
+            : h('div.callout.callout--warn.mb-3', null, icon('alert'), 'Bukti pembayaran tidak tersedia. Minta pelanggan mengunggah ulang.'),
+          o.proofAt
+            ? h('div.t-xs', { style: { marginBottom: '12px' } }, `Diunggah: ${fmtDateTime(o.proofAt)}`)
+            : null,
+          o.proofNote
+            ? h('div.callout.callout--warn.mb-3', null, icon('info'), h('b', null, 'Catatan pelanggan: '), o.proofNote)
+            : null,
+          h('div.field', null, h('label', null, 'Catatan'), noteInput)
+        ),
+        h('div.modal__foot', null,
+          h('button.btn.btn--ghost.grow', { onclick: reject }, 'Tolak bukti'),
+          h('button.btn.btn--primary.grow', { onclick: confirm }, icon('check'), 'Pembayaran masuk')
+        )
+      );
+    });
   };
 
   /** Detail item pesanan (untuk kasir melihat apa yang dipesan). */
@@ -1153,6 +1264,13 @@ async function ordersView() {
         : null,
       o.courier
         ? h('div.t-xs', { style: { marginTop: '2px' } }, `Kurir: ${o.courier}${o.courierPhone ? ` · ${o.courierPhone}` : ''}`)
+        : null,
+      o.proofImage && o.paymentStatus !== 'paid'
+        ? h('div.t-xs', { style: { marginTop: '4px', color: 'var(--amber, #d97706)', fontWeight: '600' } },
+          `Bukti bayar menunggu verifikasi${o.proofAt ? ` · ${fmtDateTime(o.proofAt)}` : ''}`)
+        : null,
+      o.paymentConfirmedBy
+        ? h('div.t-xs', { style: { marginTop: '2px' } }, `Dikonfirmasi oleh ${o.paymentConfirmedBy}`)
         : null
     );
 
@@ -1160,7 +1278,7 @@ async function ordersView() {
   const pickCourier = (o) => {
     modal((close) => {
       const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
-      const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon kurir' });
+      const phoneInput = h('input.input', { type: 'tel', placeholder: '+62 812-3456-7890' });
       // Id akun kurir terpilih — pesanan ini akan muncul di portal kurir itu.
       let pickedId = '';
 
@@ -1224,7 +1342,11 @@ async function ordersView() {
         h('div.modal__body', null,
           preset,
           h('div.field', null, h('label', null, 'Nama kurir'), nameInput),
-          h('div.field.mt-3', null, h('label', null, 'Nomor telepon kurir'), phoneInput)
+          h('div.field.mt-3', null,
+            h('label', null, 'Nomor WhatsApp kurir'),
+            phoneInput,
+            h('div.field__hint', null, 'Tulis dengan kode negara, contoh +62 812-3456-7890.')
+          )
         ),
         h('div.modal__foot', null,
           h('button.btn.btn--ghost.grow', { onclick: close }, 'Batal'),
@@ -1268,13 +1390,15 @@ async function ordersView() {
               h('div.col.gap-2', { style: { alignItems: 'flex-end' } },
                 h('div.t-mono', { style: { fontSize: '14px', fontWeight: '700' } }, rupiah(o.total)),
                 h('div.row.gap-1', null,
-                  o.status === 'pending' ? h('button.btn.btn--sm.btn--mint', {
-                    onclick: async () => {
-                      const res = await api.payOrder(o.code, 'QRIS');
-                      if (res.ok) { toast('Pembayaran dikonfirmasi', 'ok'); refresh(); }
-                      else toast(res.error || 'Gagal', 'err');
-                    },
-                  }, 'Konfirmasi bayar') : null,
+                  // Bukti sudah diunggah, belum dikonfirmasi kasir:
+                  // kasir WAJIB memeriksa bukti sebelum memproses pesanan.
+                  o.proofImage && o.paymentStatus !== 'paid' ? h('button.btn.btn--sm.btn--mint', {
+                    onclick: () => reviewProof(o),
+                  }, icon('image'), 'Cek bukti bayar') : null,
+                  // QRIS tanpa bukti: belum ada yang bisa diperiksa.
+                  o.payment === 'QRIS' && !o.proofImage && o.status === 'pending' ? h('button.btn.btn--sm.btn--soft', {
+                    onclick: () => toast('Pelanggan belum mengunggah bukti pembayaran', 'warn'),
+                  }, icon('clock'), 'Belum ada bukti') : null,
                   o.status === 'paid' ? h('button.btn.btn--sm.btn--soft', {
                     onclick: async () => { await api.setOrderStatus(o.code, 'preparing'); refresh(); },
                   }, 'Proses') : null,
@@ -2290,7 +2414,9 @@ async function usersView() {
       const phoneField = h('div.field.mt-3', null,
         h('label', null, 'Nomor WhatsApp'),
         phoneInput,
-        h('div.field__hint', null, 'Dipakai pelanggan untuk menghubungi kurir. Kosongkan bila tidak ada.')
+        h('div.field__hint', null,
+          'Tulis dengan kode negara, contoh +62 812-3456-7890. Dipakai pelanggan untuk menghubungi kurir.'
+        )
       );
       const syncPhoneField = () => {
         phoneField.classList.toggle('hidden', roleSelect.value !== 'kurir');
@@ -2385,8 +2511,11 @@ async function settingsView() {
 
   const SAVED_AT_KEY = 'mykasir.settings.savedAt';
 
-  const savedLabel = h('div.t-xs', {
-    style: { marginTop: '2px', opacity: '0.75' },
+  // span (bukan div) supaya "terakhir disimpan" dan "N perubahan belum
+  // disimpan" bisa berdampingan dalam satu baris — di potret, div akan
+  // memaksa baris baru sehingga toolbar menjulang tinggi.
+  const savedLabel = h('span.t-xs', {
+    style: { opacity: '0.75' },
   });
 
   const dirtyLabel = h('span.t-xs', {
@@ -2442,8 +2571,8 @@ async function settingsView() {
     savedAt = Number(localStorage.getItem(SAVED_AT_KEY) || 0) || 0;
   } catch { /* ignore */ }
   savedLabel.textContent = savedAt
-    ? `Terakhir disimpan: ${fmtDateTime(savedAt)}`
-    : 'Belum ada penyimpanan pada perangkat ini';
+    ? `Tersimpan ${fmtDateTime(savedAt)}`
+    : 'Belum pernah disimpan';
 
   const save = async () => {
     if (!dirty.size) return;
@@ -3606,9 +3735,10 @@ async function settingsView() {
 
   const toolbar = h('div.toolbar.settings-toolbar', null,
     h('div.grow', null,
-      h('div.t-sm', null, 'Perubahan disimpan ke Spreadsheet hanya setelah tombol Simpan ditekan.'),
-      savedLabel,
-      dirtyLabel
+      // Satu baris ringkas: penjelasan panjang membuat toolbar menumpuk
+      // di layar potret.
+      h('div.t-sm', null, 'Tekan Simpan untuk menyimpan perubahan.'),
+      h('div.settings-toolbar__meta', null, savedLabel, dirtyLabel)
     ),
     h('div.row.gap-2', null,
       h('button.btn.btn--ghost', {

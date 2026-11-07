@@ -8,7 +8,7 @@ import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, uid, orderCode, modal, closeModal, copyText, emptyState,
   compressForStorage, resolveImageSrc, normalizeCoordinate,
-  whatsappHref, mapsHref,
+  whatsappHref, mapsHref, JSONP_SAFE_MAX_CHARS,
 } from '../util.js';
 import * as api from '../api.js';
 import * as cart from '../cart.js';
@@ -972,7 +972,7 @@ function openCheckout() {
       type: 'text', placeholder: 'Nama lengkap', value: cart.cart().customer,
     });
     const phoneInput = h('input.input', {
-      type: 'tel', placeholder: 'Nomor WhatsApp', value: cart.cart().phone,
+      type: 'tel', placeholder: '+62 812-3456-7890', value: cart.cart().phone,
     });
     const addressInput = h('textarea.textarea', {
       placeholder: 'Alamat lengkap beserta patokan',
@@ -981,6 +981,14 @@ function openCheckout() {
     const noteInput = h('input.input', {
       type: 'text', placeholder: 'Catatan untuk penjual (opsional)',
     });
+
+    // Keterangan kode negara: nomor WhatsApp dipakai kurir untuk menghubungi
+    // pelanggan, jadi format internasional lebih aman.
+    const phoneField = h('div.field.mt-3', null,
+      h('label', null, 'Nomor WhatsApp (opsional)'),
+      phoneInput,
+      h('div.field__hint', null, 'Tulis dengan kode negara, contoh +62 812-3456-7890.')
+    );
 
     const addressField = h('div.field.mt-3', null,
       h('label', null, 'Alamat pengiriman'),
@@ -1231,10 +1239,7 @@ function openCheckout() {
         h('label', null, `Nama ${data.features.customerName ? 'pelanggan' : '(opsional)'}`),
         nameInput
       ),
-      h('div.field.mt-3', null,
-        h('label', null, 'Nomor WhatsApp (opsional)'),
-        phoneInput
-      ),
+      phoneField,
       addressField,
       mapField,
       h('div.field.mt-3', null,
@@ -1415,8 +1420,10 @@ function openCheckout() {
         fulfilment,
         payment,
         discount: 0,
-        lat: fulfilment === 'delivery' ? cart.cart().destLat : null,
-        lng: fulfilment === 'delivery' ? cart.cart().destLng : null,
+        // Koordinat tujuan dikirim ternormalisasi supaya tidak pernah
+        // hilang titik desimalnya (akibatnya link Google Maps gagal).
+        lat: fulfilment === 'delivery' ? normalizeCoordinate(cart.cart().destLat, 'lat') : null,
+        lng: fulfilment === 'delivery' ? normalizeCoordinate(cart.cart().destLng, 'lng') : null,
       });
 
       btn.disabled = false;
@@ -1509,9 +1516,12 @@ function openCheckout() {
               h('div.callout.mt-3', null, icon('clock'), timerLabel),
               h('button.btn.btn--soft.btn--block.mt-3', {
                 onclick: () => {
+                  // Menandai bahwa pembayaran sudah dikirim. Pesanan
+                  // BELUM diproses: pelanggan wajib mengunggah bukti dulu,
+                  // lalu kasir memverifikasinya (lihat renderPaid).
                   api.payOrder(order.code, 'QRIS').then((r) => {
                     if (r.ok) {
-                      toast('Pembayaran QRIS dikonfirmasi', 'ok');
+                      toast('Pembayaran tercatat — unggah bukti pembayaran', 'ok');
                       renderPaid(order);
                     } else {
                       toast(r.error || 'Gagal memproses pembayaran', 'err');
@@ -1545,19 +1555,120 @@ function openCheckout() {
       }
     }
 
+    /**
+     * After payment: customer MUST upload proof of payment.
+     *
+     * Proof is sent to the store and checked by the cashier. The order is
+     * only moved to "paid" (and therefore only processed) after the
+     * cashier confirms it. This closes the gap where a customer claims to
+     * have paid without any evidence.
+     */
     function renderPaid(order) {
+      step3.innerHTML = '';
+
+      const preview = h('div.proof__preview');
+      const fileInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
+      fileInput.style.display = 'none';
+      const statusLine = h('div.t-sm');
+      const submitBtn = h('button.btn.btn--primary.btn--block.mt-3', {
+        onclick: async () => {
+          const file = fileInput.files?.[0];
+          if (!file) {
+            toast('Pilih foto bukti pembayaran dulu', 'warn');
+            return;
+          }
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '';
+          submitBtn.append(h('span.spinner'), 'Mengunggah…');
+          try {
+            // Compress first so the image is small enough for the API;
+            // large files are stored in Google Drive instead.
+            const dataUrl = await compressForStorage(file, { maxSize: 900, maxBytes: 400_000 });
+            let fileId = '';
+            if (dataUrl.length > JSONP_SAFE_MAX_CHARS) {
+              const up = await api.uploadImageToDrive(dataUrl, `bukti-${order.code}.jpg`);
+              if (up && up.ok && up.fileId) {
+                fileId = up.fileId;
+              } else {
+                toast((up && up.error) || 'Gagal mengunggah bukti', 'err');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '';
+                submitBtn.append(icon('upload'), 'Kirim bukti pembayaran');
+                return;
+              }
+            } else {
+              fileId = dataUrl;
+            }
+
+            const res = await api.savePaymentProof(order.code, fileId);
+            if (!res || res.ok === false) {
+              toast((res && res.error) || 'Gagal menyimpan bukti pembayaran', 'err');
+              submitBtn.disabled = false;
+              submitBtn.innerHTML = '';
+              submitBtn.append(icon('upload'), 'Kirim bukti pembayaran');
+              return;
+            }
+            renderProofSent(order);
+          } catch (err) {
+            toast((err && err.message) || 'Gagal mengunggah bukti', 'err');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '';
+            submitBtn.append(icon('upload'), 'Kirim bukti pembayaran');
+          }
+        },
+      }, icon('upload'), 'Kirim bukti pembayaran');
+
+      fileInput.addEventListener('change', () => {
+        preview.innerHTML = '';
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        const img = h('img.proof__img', { alt: 'Pratinjau bukti pembayaran' });
+        const url = URL.createObjectURL(file);
+        img.addEventListener('load', () => URL.revokeObjectURL(url));
+        img.src = url;
+        preview.append(img);
+        statusLine.textContent = file.name;
+      });
+
+      step3.append(
+        h('div.t-center', null,
+          h('div.badge.badge--info.mt-2', null, icon('checkCircle'), 'Pembayaran berhasil'),
+          h('div.qris__amount.mt-3', null, rupiah(order.total)),
+          h('div.t-sm', null, order.code)
+        ),
+        h('div.callout.callout--warn.mt-5', null,
+          icon('upload'),
+          'Unggah foto bukti pembayaran agar kasir dapat memverifikasi. ',
+          'Pesanan diproses setelah kasir mengonfirmasi pembayaran Anda.'
+        ),
+        h('div.proof.mt-4', null,
+          preview,
+          h('button.btn.btn--soft.btn--block.mt-3', {
+            onclick: () => fileInput.click(),
+          }, icon('image'), 'Pilih foto bukti pembayaran'),
+          fileInput,
+          statusLine
+        ),
+        submitBtn
+      );
+    }
+
+    /** Bukti sudah terkirim — menunggu konfirmasi kasir. */
+    function renderProofSent(order) {
       step3.innerHTML = '';
       step3.append(
         h('div.t-center', null,
-          h('div.badge.badge--ok.mt-2', null, icon('checkCircle'), 'Pembayaran berhasil'),
+          h('div.badge.badge--ok.mt-2', null, icon('checkCircle'), 'Bukti terkirim'),
           h('div.qris__amount.mt-3', null, rupiah(order.total)),
           h('div.t-sm', null, order.code)
         ),
         h('div.callout.callout--ok.mt-5', null,
-          icon('checkCircle'),
-          'Pembayaran diterima. Pesanan Anda ',
-          h('b', null, order.fulfilment === 'delivery' ? 'sedang diantar' : 'siap diambil'),
-          ' di ', h('b', null, state.data.store.name), '.'
+          icon('clock'),
+          'Bukti pembayaran sudah dikirim ke kasir. Pesanan Anda akan diproses setelah kasir memastikan pembayaran masuk dan sesuai.'
+        ),
+        h('div.t-center.mt-4', null,
+          h('div.t-sm', null, 'Simpan kode pesanan ini untuk melacak status:'),
+          h('div.t-h3.mt-2', null, order.code)
         )
       );
     }
@@ -1702,9 +1813,10 @@ function orderStatus(order) {
     : order.status === 'delivering' ? 'Diantar'
       : order.status === 'delivered' ? 'Selesai'
         : order.status === 'ready' ? 'Siap diambil'
-          : order.status === 'pending' ? 'Menunggu bayar'
-            : unpaid ? 'Menunggu pembayaran di tempat'
-              : 'Diproses';
+          : order.paymentStatus === 'awaitingProof' ? 'Menunggu verifikasi kasir'
+            : order.status === 'pending' ? 'Menunggu bayar'
+              : unpaid ? 'Menunggu pembayaran di tempat'
+                : 'Diproses';
 
   return h('div', null,
     h('div.panel', null,
@@ -1722,6 +1834,13 @@ function orderStatus(order) {
           : steps,
         order.status === 'pending'
           ? h('div.callout.callout--warn.mt-4', null, icon('clock'), 'Selesaikan pembayaran QRIS Anda agar pesanan diproses.')
+          : null,
+        // Bukti sudah dikirim, kasir belum mengonfirmasi.
+        order.payment === 'QRIS' && order.proofImage && order.paymentStatus !== 'paid'
+          ? h('div.callout.callout--info.mt-4', null,
+            icon('clock'),
+            'Bukti pembayaran Anda sudah diterima. Pesanan diproses setelah kasir memastikan pembayaran masuk.'
+          )
           : null,
         unpaid
           ? h('div.callout.callout--warn.mt-4', null,
