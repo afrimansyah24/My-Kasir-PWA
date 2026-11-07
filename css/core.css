@@ -628,6 +628,7 @@ a {
 .switch {
   --w: 46px;
   position: relative;
+  display: inline-block;
   width: var(--w);
   height: 27px;
   flex: none;
@@ -635,6 +636,28 @@ a {
   background: rgba(16, 22, 43, 0.16);
   transition: background var(--t-base) var(--ease);
   cursor: pointer;
+  vertical-align: middle;
+}
+
+/* Baris switch: track + teks.
+ *
+ * sebelumnya teks label diletakkan DI DALAM elemen .switch yang lebarnya
+ * tetap 46px — teks keluar dari kotaknya dan menimpa isi lain (terlihat
+ * pada popup produk). Sekarang track dan teks adalah dua elemen terpisah
+ * dalam satu baris flex, jadi tidak pernah saling menimpa.
+ */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch-row__text {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink-700);
 }
 .switch::after {
   content: '';

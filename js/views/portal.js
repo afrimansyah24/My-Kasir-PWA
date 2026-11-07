@@ -71,11 +71,11 @@ export function mountPortal(view, params = []) {
 
 const PIN_LENGTH = 6;
 
-/** Daftar akun bawaan; bisa diubah owner lewat menu Pengguna. */
-const DEFAULT_ACCOUNTS = [
-  { username: 'owner', password: 'owner123', name: 'Owner', role: 'owner' },
-  { username: 'kasir', password: 'kasir123', name: 'Kasir', role: 'kasir' },
-];
+/*
+ * Catatan: akun owner/kasir dibuat oleh backend (gas/Code.gs -> SEED_USERS_)
+ * saat sheet Users masih kosong. Halaman login sengaja TIDAK menampilkan
+ * username/kata sandi bawaan — owner bisa mengubahnya lewat menu Pengguna.
+ */
 
 function loginGate() {
   let step = 'pin';        // 'pin' | 'role' | 'form'
@@ -97,6 +97,9 @@ function loginGate() {
     const dots = h('div.pin-display');
     const error = h('div.gate__error');
 
+    // Status proses: 'idle' | 'checking'
+    let busy = false;
+
     const renderDots = () => {
       dots.innerHTML = '';
       for (let i = 0; i < PIN_LENGTH; i++) {
@@ -104,28 +107,50 @@ function loginGate() {
       }
     };
 
+    /**
+     * Periksa PIN ke server.
+     *
+     * Selama proses berjalan tombol/keypad dinonaktifkan dan spinner
+     * ditampilkan, sehingga pengguna tahu permintaannya sedang diproses
+     * (bukan macet). Setelah dijawab, layar berikutnya langsung dibuka.
+     */
+    const verify = async () => {
+      if (busy) return;
+      busy = true;
+      setBusy(true);
+      try {
+        const res = await api.verifyPortalPin(pin);
+        if (res && res.ok) {
+          step = 'role';
+          paint();
+          return;
+        }
+        error.textContent = (res && res.error) || 'PIN salah';
+        pin = '';
+        renderDots();
+        setTimeout(() => { error.textContent = ''; }, 2400);
+      } catch (err) {
+        error.textContent = (err && err.message) || 'Gagal memeriksa PIN';
+        pin = '';
+        renderDots();
+      } finally {
+        busy = false;
+        setBusy(false);
+      }
+    };
+
     const press = (d) => {
-      if (pin.length >= PIN_LENGTH) return;
+      if (busy || pin.length >= PIN_LENGTH) return;
       pin += d;
       renderDots();
       error.textContent = '';
 
-      if (pin.length === PIN_LENGTH) {
-        api.verifyPortalPin(pin).then((res) => {
-          if (res && res.ok) {
-            step = 'role';
-            paint();
-            return;
-          }
-          error.textContent = (res && res.error) || 'PIN salah';
-          pin = '';
-          renderDots();
-          setTimeout(() => { error.textContent = ''; }, 2400);
-        });
-      }
+      // PIN lengkap langsung diperiksa — tidak perlu menekan Enter.
+      if (pin.length === PIN_LENGTH) verify();
     };
 
     const back = () => {
+      if (busy) return;
       if (pin.length) {
         pin = pin.slice(0, -1);
         renderDots();
@@ -135,6 +160,7 @@ function loginGate() {
       }
     };
 
+    // --- keypad -------------------------------------------------------
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
     const keypad = h('div.keypad');
     for (const k of keys) {
@@ -144,17 +170,58 @@ function loginGate() {
       h('button.keypad__key.keypad__key--fn', { onclick: back, 'aria-label': 'Hapus' }, icon('chevronLeft')),
       h('button.keypad__key', { onclick: () => press('0') }, '0'),
       h('button.keypad__key.keypad__key--fn', {
-        onclick: () => { pin = ''; renderDots(); error.textContent = ''; },
+        onclick: () => { if (busy) return; pin = ''; renderDots(); error.textContent = ''; },
         'aria-label': 'Hapus semua',
       }, icon('refresh'))
     );
+
+    // --- tombol Enter (kirim) -----------------------------------------
+    const enterBtn = h('button.btn.btn--primary.btn--lg.grow.mt-4', {
+      type: 'button',
+      onclick: () => {
+        if (pin.length !== PIN_LENGTH) {
+          error.textContent = `Masukkan ${PIN_LENGTH} digit PIN terlebih dahulu`;
+          setTimeout(() => { error.textContent = ''; }, 2400);
+          return;
+        }
+        verify();
+      },
+    }, icon('check'), 'Masuk');
+
+    // Dibuat dalam keadaan tersembunyi: spinner hanya muncul saat
+    // permintaan PIN sedang berjalan (lihat setBusy).
+    const busyLabel = h('div.gate__busy.hidden', null,
+      h('span.spinner'),
+      h('span', null, 'Memeriksa PIN…')
+    );
+
+    /**
+     * Aktif/nonaktifkan tampilan selama proses berjalan.
+     * Spinner menggantikan isi tombol Enter, dan keypad menjadi nonaktif.
+     */
+    function setBusy(on) {
+      busyLabel.classList.toggle('hidden', !on);
+      enterBtn.classList.toggle('hidden', on);
+      keypad.classList.toggle('is-disabled', on);
+      keypad.querySelectorAll('button').forEach((b) => { b.disabled = !!on; });
+      dots.classList.toggle('is-busy', !!on);
+    }
 
     renderDots();
 
     const onKey = (e) => {
       if (step !== 'pin') { document.removeEventListener('keydown', onKey); return; }
-      if (/^[0-9]$/.test(e.key)) press(e.key);
-      else if (e.key === 'Backspace') back();
+      if (/^[0-9]$/.test(e.key)) { press(e.key); return; }
+      if (e.key === 'Backspace') { back(); return; }
+      // Enter = kirim / periksa PIN
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (pin.length === PIN_LENGTH) verify();
+        else {
+          error.textContent = `Masukkan ${PIN_LENGTH} digit PIN terlebih dahulu`;
+          setTimeout(() => { error.textContent = ''; }, 2400);
+        }
+      }
     };
     document.addEventListener('keydown', onKey);
 
@@ -165,10 +232,12 @@ function loginGate() {
       dots,
       error,
       keypad,
+      enterBtn,
+      busyLabel,
       h('div.row.gap-2.mt-5', null,
         h('button.btn.btn--ghost.btn--sm.grow', { onclick: () => go('/') }, icon('arrowLeft'), 'Kembali ke toko'),
         h('button.btn.btn--ghost.btn--sm.grow', {
-          onclick: () => { pin = ''; renderDots(); error.textContent = ''; },
+          onclick: () => { if (busy) return; pin = ''; renderDots(); error.textContent = ''; },
         }, icon('refresh'), 'Bersihkan')
       )
     );
@@ -248,10 +317,6 @@ function loginGate() {
     userInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') passInput.focus(); });
     passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 
-    const hint = role === 'owner'
-      ? 'Akun bawaan: owner / owner123'
-      : 'Akun bawaan: kasir / kasir123';
-
     setTimeout(() => userInput.focus(), 30);
 
     return h('div', null,
@@ -264,7 +329,6 @@ function loginGate() {
       ),
       error,
       h('button.btn.btn--primary.btn--lg.grow.mt-4', { onclick: submit }, icon('login'), 'Masuk'),
-      h('p.t-xs.mt-3', { style: { opacity: '0.75' } }, hint),
       h('div.row.gap-2.mt-4', null,
         h('button.btn.btn--ghost.btn--sm.grow', {
           onclick: () => { step = 'role'; paint(); },
@@ -1360,8 +1424,206 @@ async function queueView() {
    Products (Owner)
    ========================================================================== */
 
+
+/**
+ * Kelola kategori produk.
+ *
+ * Daftar kategori di sheet Categories. Kategori yang dipakai produk tidak
+ * boleh dihapus (backend menolak dengan pesan jelas). Setelah disimpan,
+ * daftar chip filter di Katalog & Stok langsung diperbarui.
+ */
+function openCategoryManager(categories, onChanged) {
+  const listHost = h('div.col.gap-2');
+
+  const renderList = () => {
+    listHost.innerHTML = '';
+    if (!categories.length) {
+      listHost.append(emptyState('tag', 'Belum ada kategori', 'Tambahkan kategori pertama untuk mengelompokkan produk.'));
+      return;
+    }
+    for (const cat of categories) {
+      listHost.append(
+        h('div.list-row', null,
+          h('div.avatar.avatar--teal', null, icon(cat.icon || 'tag')),
+          h('div.grow', null,
+            h('div', { style: { fontWeight: '600' } }, cat.name),
+            h('div.t-xs', null, cat.id)
+          ),
+          h('div.row.gap-1', null,
+            h('button.btn.btn--sm.btn--icon.btn--ghost', {
+              'aria-label': `Ubah ${cat.name}`,
+              onclick: () => openForm(cat),
+            }, icon('edit')),
+            h('button.btn.btn--sm.btn--icon.btn--ghost', {
+              'aria-label': `Hapus ${cat.name}`,
+              onclick: async () => {
+                const ok = await confirmDialog({
+                  title: `Hapus kategori "${cat.name}"?`,
+                  body: 'Kategori hanya bisa dihapus bila tidak ada produk yang memakainya.',
+                });
+                if (!ok) return;
+                const res = await api.deleteCategoryRecord(cat.id);
+                if (res && res.ok === false) {
+                  toast(res.error || 'Gagal menghapus kategori', 'err', 3200);
+                  return;
+                }
+                const idx = categories.findIndex((c) => c.id === cat.id);
+                if (idx >= 0) categories.splice(idx, 1);
+                api.bustCache();
+                renderList();
+                toast('Kategori dihapus', 'ok');
+                onChanged?.();
+              },
+            }, icon('trash'))
+          )
+        )
+      );
+    }
+  };
+
+  const openForm = (existing) => {
+    const isNew = !existing;
+    const nameInput = h('input.input', {
+      type: 'text',
+      value: existing?.name || '',
+      placeholder: 'Nama kategori',
+    });
+    const iconSelect = h('select.select');
+    iconSelect.append(h('option', { value: 'tag' }, 'tag'));
+    for (const name of ICON_NAMES) {
+      if (name === 'tag') continue;
+      iconSelect.append(h('option', { value: name }, name));
+    }
+    iconSelect.value = existing?.icon || 'tag';
+
+    modal((close) => {
+      return h('div', null,
+        h('div.modal__head', null,
+          h('div.grow', null,
+            h('h3.t-h2', null, isNew ? 'Tambah kategori' : 'Ubah kategori'),
+            h('p.t-body', { style: { marginTop: '4px' } }, 'Kategori dipakai untuk mengelompokkan produk dan filter katalog.')
+          ),
+          h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+        ),
+        h('div.modal__body', null,
+          h('div.field', null, h('label', null, 'Nama kategori'), nameInput),
+          h('div.field.mt-3', null, h('label', null, 'Ikon'), iconSelect)
+        ),
+        h('div.modal__foot', null,
+          h('button.btn.btn--ghost.grow', { onclick: close }, 'Batal'),
+          h('button.btn.btn--primary.grow', {
+            onclick: async () => {
+              const name = nameInput.value.trim();
+              if (!name) {
+                toast('Nama kategori wajib diisi', 'err');
+                return;
+              }
+              const res = await api.saveCategoryRecord({
+                ...(existing || {}),
+                name,
+                icon: iconSelect.value,
+              });
+              if (res && res.ok === false) {
+                toast(res.error || 'Gagal menyimpan kategori', 'err');
+                return;
+              }
+              const saved = res?.category || { ...(existing || {}), name, icon: iconSelect.value };
+              const idx = categories.findIndex((c) => c.id === saved.id);
+              if (idx >= 0) categories[idx] = saved;
+              else categories.push(saved);
+              api.bustCache();
+              renderList();
+              toast(isNew ? 'Kategori ditambahkan' : 'Kategori diperbarui', 'ok');
+              onChanged?.();
+              close();
+            },
+          }, icon('check'), 'Simpan')
+        )
+      );
+    });
+  };
+
+  renderList();
+
+  modal((close) => {
+    const nameInput = h('input.input', {
+      type: 'text',
+      placeholder: 'Nama kategori baru',
+      onkeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const name = nameInput.value.trim();
+        if (!name) return;
+        nameInput.value = '';
+        api.saveCategoryRecord({ name, icon: 'tag' }).then((res) => {
+          if (res && res.ok === false) {
+            toast(res.error || 'Gagal menyimpan kategori', 'err');
+            return;
+          }
+          const saved = res?.category;
+          if (saved) categories.push(saved);
+          api.bustCache();
+          renderList();
+          toast('Kategori ditambahkan', 'ok');
+          onChanged?.();
+        });
+      },
+    });
+
+    return h('div', null,
+      h('div.modal__head', null,
+        h('div.grow', null,
+          h('h3.t-h2', null, 'Kelola kategori'),
+          h('p.t-body', { style: { marginTop: '4px' } }, 'Tambah atau hapus kategori. Daftar filter di Katalog & Stok menyesuaikan otomatis.')
+        ),
+        h('button.btn.btn--icon.btn--ghost', { onclick: close, 'aria-label': 'Tutup' }, icon('close'))
+      ),
+      h('div.modal__body', null,
+        listHost,
+        h('div.divider'),
+        h('div.field', null,
+          h('label', null, 'Tambah kategori baru'),
+          h('div.row.gap-2', null,
+            h('div.grow', null, nameInput),
+            h('button.btn.btn--soft', {
+              onclick: () => {
+                const name = nameInput.value.trim();
+                if (!name) {
+                  toast('Nama kategori wajib diisi', 'err');
+                  return;
+                }
+                nameInput.value = '';
+                api.saveCategoryRecord({ name, icon: 'tag' }).then((res) => {
+                  if (res && res.ok === false) {
+                    toast(res.error || 'Gagal menyimpan kategori', 'err');
+                    return;
+                  }
+                  const saved = res?.category;
+                  if (saved) categories.push(saved);
+                  api.bustCache();
+                  renderList();
+                  toast('Kategori ditambahkan', 'ok');
+                  onChanged?.();
+                });
+              },
+            }, icon('plus'), 'Tambah')
+          ),
+          h('div.field__hint', null, 'Kategori yang masih dipakai produk tidak bisa dihapus.')
+        )
+      ),
+      h('div.modal__foot', null,
+        h('button.btn.btn--primary.grow', { onclick: close }, 'Selesai')
+      )
+    );
+  });
+}
+
 async function productsView() {
-  const [products, categories] = await Promise.all([api.getProducts(), api.getCategories()]);
+  const [productsRaw, categoriesRaw] = await Promise.all([api.getProducts(), api.getCategories()]);
+  // Array lokal (bukan snapshot) supaya daftar kategori bisa bertambah /
+  // berkurang tanpa memuat ulang seluruh halaman.
+  const products = Array.isArray(productsRaw) ? productsRaw.slice() : [];
+  const categories = Array.isArray(categoriesRaw) ? categoriesRaw.slice() : [];
   let query = '';
   let category = 'all';
 
@@ -1370,6 +1632,9 @@ async function productsView() {
 
   const render = () => {
     let list = products.slice();
+    // Kategori yang ditampilkan selalu berasal dari sheet Categories dan
+    // hanya kategori yang masih dipakai produk. Tambah/hapus kategori ikut
+    // daftar ini otomatis setelah refresh data.
     if (category !== 'all') list = list.filter((p) => p.category === category);
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -1384,76 +1649,76 @@ async function productsView() {
     }
 
     listHost.append(
-      h('div.panel', null,
-        h('div.panel__body.panel__body--flush', null,
-          h('div.table-wrap', { style: { border: 'none', borderRadius: '0' } },
-            h('table.table', null,
-              h('thead', null,
-                h('tr', null,
-                  h('th', null, 'Produk'),
-                  h('th', null, 'Kategori'),
-                  h('th', { class: 't-right' }, 'Harga'),
-                  h('th', { class: 't-right' }, 'Modal'),
-                  h('th', { class: 't-right' }, 'Stok'),
-                  h('th', null, 'Status'),
-                  h('th', null, '')
+      h('div.product-admin-grid', null,
+        list.map((p) => {
+          const cat = categories.find((c) => c.id === p.category);
+          const out = p.trackStock && p.stock <= 0;
+          const low = p.trackStock && p.stock > 0 && p.stock <= 5;
+          const status = !p.active
+            ? h('span.badge', null, 'Nonaktif')
+            : out
+              ? h('span.badge.badge--err', null, 'Stok habis')
+              : low
+                ? h('span.badge.badge--warn', null, 'Stok menipis')
+                : h('span.badge.badge--ok', null, 'Aktif');
+
+          return h('article.product-admin-card', null,
+            h('div.product-admin-card__media', null,
+              p.image
+                ? h('img', { src: p.image, alt: p.name, loading: 'lazy' })
+                : h('div.product-admin-card__placeholder', null, icon('box')),
+              status
+            ),
+            h('div.product-admin-card__body', null,
+              h('div.product-admin-card__title-row', null,
+                h('div.grow', null,
+                  h('h3.product-admin-card__title', null, p.name),
+                  h('div.t-xs', null, cat?.name || 'Tanpa kategori')
+                ),
+                h('span.badge.badge--info', null, p.trackStock ? `Stok ${p.stock}` : 'Stok ∞')
+              ),
+              p.description ? h('p.product-admin-card__desc', null, p.description) : null,
+              h('div.product-admin-card__prices', null,
+                h('div', null,
+                  h('span.t-xs', null, 'Harga jual'),
+                  h('b', null, rupiah(p.price))
+                ),
+                h('div', null,
+                  h('span.t-xs', null, 'Modal'),
+                  h('b', null, rupiah(p.cost))
+                ),
+                h('div', null,
+                  h('span.t-xs', null, 'Satuan'),
+                  h('b', null, p.unit || 'pcs')
                 )
               ),
-              h('tbody', null,
-                list.map((p) => {
-                  const cat = categories.find((c) => c.id === p.category);
-                  const out = p.trackStock && p.stock <= 0;
-                  const low = p.trackStock && p.stock > 0 && p.stock <= 5;
-                  return h('tr', null,
-                    h('td', null,
-                      h('div.row.gap-3', null,
-                        h('div.thumb-sm', null, p.image ? h('img', { src: p.image, alt: '' }) : null),
-                        h('div', null,
-                          h('div', { style: { fontWeight: '600' } }, p.name),
-                          h('div.t-xs', null, p.description?.slice(0, 46) || '')
-                        )
-                      )
-                    ),
-                    h('td', null, cat?.name || '—'),
-                    h('td', { class: 't-right t-num' }, rupiah(p.price)),
-                    h('td', { class: 't-right t-num' }, rupiah(p.cost)),
-                    h('td', { class: 't-right t-num' }, p.trackStock ? String(p.stock) : '∞'),
-                    h('td', null,
-                      !p.active
-                        ? h('span.badge', null, 'Nonaktif')
-                        : out
-                          ? h('span.badge.badge--err', null, 'Habis')
-                          : low
-                            ? h('span.badge.badge--warn', null, 'Menipis')
-                            : h('span.badge.badge--ok', null, 'Aktif')
-                    ),
-                    h('td', { class: 't-right' },
-                      h('div.row.gap-1', { style: { justifyContent: 'flex-end' } },
-                        h('button.btn.btn--sm.btn--icon.btn--ghost', {
-                          'aria-label': 'Ubah', onclick: () => openProductForm(p),
-                        }, icon('edit')),
-                        h('button.btn.btn--sm.btn--icon.btn--ghost', {
-                          'aria-label': 'Hapus',
-                          onclick: async () => {
-                            const ok = await confirmDialog({
-                              title: `Hapus "${p.name}"?`,
-                              body: 'Produk akan dihapus dari katalog. Transaksi lama tetap tersimpan.',
-                            });
-                            if (!ok) return;
-                            await api.deleteProductRecord(p.id);
-                            toast('Produk dihapus', 'ok');
-                            go('/portal/products', { replace: true });
-                            location.reload();
-                          },
-                        }, icon('trash'))
-                      )
-                    )
-                  );
-                })
+              h('div.product-admin-card__actions', null,
+                h('button.btn.btn--sm.btn--soft.grow', {
+                  onclick: () => openProductForm(p),
+                }, icon('edit'), 'Ubah'),
+                h('button.btn.btn--sm.btn--ghost.btn--icon', {
+                  'aria-label': `Hapus ${p.name}`,
+                  title: 'Hapus produk',
+                  onclick: async () => {
+                    const ok = await confirmDialog({
+                      title: `Hapus "${p.name}"?`,
+                      body: 'Produk akan dihapus dari katalog. Transaksi lama tetap tersimpan.',
+                    });
+                    if (!ok) return;
+                    const res = await api.deleteProductRecord(p.id);
+                    if (res && res.ok === false) {
+                      toast(res.error || 'Gagal menghapus produk', 'err');
+                      return;
+                    }
+                    toast('Produk dihapus', 'ok');
+                    api.bustCache();
+                    location.reload();
+                  },
+                }, icon('trash'))
               )
             )
-          )
-        )
+          );
+        })
       )
     );
   };
@@ -1508,8 +1773,14 @@ async function productsView() {
       const activeSwitch = h('input', { type: 'checkbox', checked: draft.active });
       const negoSwitch = h('input', { type: 'checkbox', checked: draft.negotiable });
 
+      /**
+       * Baris toggle: track switch + teks di sebelahnya.
+       *
+       * Teks TIDAK lagi diletakkan di dalam elemen .switch (lebarnya tetap
+       * 46px) — itu membuat tulisan keluar dari kotak dan menimpa baris lain.
+       */
       const sw = (input, label) =>
-        h('label.switch', null, input, h('span.t-sm', null, label));
+        h('label.switch-row', null, h('span.switch', null, input), h('span.switch-row__text', null, label));
 
       return h('div', null,
         h('div.modal__head', null,
@@ -1588,27 +1859,64 @@ async function productsView() {
     }, { wide: true });
   };
 
-  const cats = [h('button.chip.is-active', {
-    onclick: (e) => { category = 'all'; sync(e.currentTarget); render(); },
-  }, 'Semua')];
-  for (const cat of categories) {
+  /**
+   * Chip filter kategori.
+   *
+   * Hanya kategori yang benar-benar dipakai produk yang ditampilkan, dan
+   * daftar ini dibangun ulang setiap kali kategori berubah (tambah/hapus),
+   * sehingga chip bertambah dan berkurang otomatis.
+   */
+  const cats = [];
+  const catsHost = h('div.rail', { style: { padding: 0, flex: 'none' } });
+
+  function buildCats() {
+    // Chip mengikuti daftar kategori SEDARI AKTUAL: tambah kategori -> chip
+    // bertambah, hapus kategori -> chip berkurang. Jumlah produk per
+    // kategori ditampilkan sebagai penanda.
+    if (category !== 'all' && !categories.some((cat) => cat.id === category)) category = 'all';
+
+    const total = products.length;
+
+    cats.length = 0;
     cats.push(h('button.chip', {
-      onclick: (e) => { category = cat.id; sync(e.currentTarget); render(); },
-    }, cat.name));
+      class: category === 'all' ? 'is-active' : '',
+      onclick: (e) => { category = 'all'; sync(e.currentTarget); render(); },
+    }, `Semua (${total})`));
+    for (const cat of categories) {
+      const count = products.filter((p) => p.category === cat.id).length;
+      cats.push(h('button.chip', {
+        class: category === cat.id ? 'is-active' : '',
+        onclick: (e) => { category = cat.id; sync(e.currentTarget); render(); },
+      }, `${cat.name} (${count})`));
+    }
+
+    catsHost.innerHTML = '';
+    cats.forEach((c) => catsHost.append(c));
   }
+
   function sync(active) { cats.forEach((c) => c.classList.toggle('is-active', c === active)); }
+
+  /** Dipanggil setelah kategori ditambah / dihapus. */
+  function reloadCategories() {
+    buildCats();
+    render();
+  }
 
   searchInput.addEventListener('input', debounce(() => {
     query = searchInput.value;
     render();
   }, 160));
 
+  buildCats();
   render();
 
   return h('div', null,
     h('div.toolbar', null,
       h('div.toolbar__search.input-group', null, icon('search', 'input-group__ico'), searchInput),
-      h('div.rail', { style: { padding: 0, flex: 'none' } }, cats),
+      catsHost,
+      h('button.btn.btn--ghost', {
+        onclick: () => openCategoryManager(categories, reloadCategories),
+      }, icon('tag'), 'Kelola kategori'),
       h('button.btn.btn--primary', { onclick: () => openProductForm(null) }, icon('plus'), 'Tambah produk')
     ),
     listHost
@@ -1864,65 +2172,58 @@ async function usersView() {
 
   const render = () => {
     listHost.innerHTML = '';
+
+    if (!users.length) {
+      listHost.append(emptyState('users', 'Belum ada pengguna', 'Tambahkan akun kasir atau owner untuk mulai.'));
+      return;
+    }
+
     listHost.append(
-      h('div.panel', null,
-        h('div.panel__body.panel__body--flush', null,
-          h('div.table-wrap', { style: { border: 'none', borderRadius: '0' } },
-            h('table.table', null,
-              h('thead', null,
-                h('tr', null,
-                  h('th', null, 'Pengguna'),
-                  h('th', null, 'Username'),
-                  h('th', null, 'Peran'),
-                  h('th', null, 'Status'),
-                  h('th', null, '')
-                )
-              ),
-              h('tbody', null,
-                users.map((u) =>
-                  h('tr', null,
-                    h('td', null,
-                      h('div.row.gap-3', null,
-                        h('div.avatar', { class: u.role === 'owner' ? 'avatar--violet' : 'avatar--teal' }, initials(u.name)),
-                        h('span', { style: { fontWeight: '600' } }, u.name)
-                      )
-                    ),
-                    h('td', null, h('span.t-mono.t-sm', null, u.username)),
-                    h('td', null,
-                      h('span', { class: `badge ${u.role === 'owner' ? 'badge--violet' : 'badge--info'}` },
-                        u.role === 'owner' ? 'Owner' : 'Kasir')
-                    ),
-                    h('td', null,
-                      u.active
-                        ? h('span.badge.badge--ok', null, 'Aktif')
-                        : h('span.badge', null, 'Nonaktif')
-                    ),
-                    h('td', { class: 't-right' },
-                      h('div.row.gap-1', { style: { justifyContent: 'flex-end' } },
-                        h('button.btn.btn--sm.btn--icon.btn--ghost', {
-                          'aria-label': 'Ubah', onclick: () => openForm(u),
-                        }, icon('edit')),
-                        h('button.btn.btn--sm.btn--icon.btn--ghost', {
-                          'aria-label': 'Hapus',
-                          onclick: async () => {
-                            if (users.filter((x) => x.role === 'owner').length <= 1 && u.role === 'owner') {
-                              toast('Minimal satu owner harus ada', 'err');
-                              return;
-                            }
-                            const ok = await confirmDialog({
-                              title: `Hapus pengguna "${u.name}"?`,
-                              body: 'Pengguna tidak akan bisa masuk portal.',
-                            });
-                            if (!ok) return;
-                            await api.deleteUserRecord(u.id);
-                            toast('Pengguna dihapus', 'ok');
-                            location.reload();
-                          },
-                        }, icon('trash'))
-                      )
-                    )
-                  )
-                )
+      h('div.user-admin-grid', null,
+        users.map((u) =>
+          h('article.user-admin-card', null,
+            h('div.user-admin-card__head', null,
+              h('div.avatar.avatar--lg', { class: u.role === 'owner' ? 'avatar--violet' : 'avatar--teal' }, initials(u.name)),
+              h('div.grow', null,
+                h('div.user-admin-card__name', null, u.name),
+                h('div.user-admin-card__username', null, u.username)
+              )
+            ),
+            h('div.user-admin-card__badges', null,
+              h('span', { class: `badge ${u.role === 'owner' ? 'badge--violet' : 'badge--info'}` },
+                u.role === 'owner' ? 'Owner' : 'Kasir'),
+              u.active
+                ? h('span.badge.badge--ok', null, 'Aktif')
+                : h('span.badge', null, 'Nonaktif')
+            ),
+            h('div.user-admin-card__body', null,
+              h('div.user-admin-card__actions', null,
+                h('button.btn.btn--sm.btn--soft.grow', {
+                  onclick: () => openForm(u),
+                }, icon('edit'), 'Ubah'),
+                h('button.btn.btn--sm.btn--ghost.btn--icon', {
+                  'aria-label': `Hapus ${u.name}`,
+                  title: 'Hapus pengguna',
+                  onclick: async () => {
+                    if (users.filter((x) => x.role === 'owner').length <= 1 && u.role === 'owner') {
+                      toast('Minimal satu owner harus ada', 'err');
+                      return;
+                    }
+                    const ok = await confirmDialog({
+                      title: `Hapus pengguna "${u.name}"?`,
+                      body: 'Pengguna tidak akan bisa masuk portal.',
+                    });
+                    if (!ok) return;
+                    const res = await api.deleteUserRecord(u.id);
+                    if (res && res.ok === false) {
+                      toast(res.error || 'Gagal menghapus pengguna', 'err');
+                      return;
+                    }
+                    toast('Pengguna dihapus', 'ok');
+                    api.bustCache();
+                    location.reload();
+                  },
+                }, icon('trash'))
               )
             )
           )
@@ -1962,7 +2263,9 @@ async function usersView() {
             h('div.field__hint', null, 'Owner dapat mengubah kata sandi pengguna ini kapan saja lewat tombol "Ubah".')
           ),
           h('div.field.mt-3', null, h('label', null, 'Peran'), roleSelect),
-          h('label.switch.mt-4', null, activeSwitch, h('span.t-sm', null, 'Akun aktif'))
+          h('label.switch-row.mt-4', null,
+            h('span.switch', null, activeSwitch),
+            h('span.switch-row__text', null, 'Akun aktif'))
         ),
         h('div.modal__foot', null,
           h('button.btn.btn--ghost.grow', { onclick: close }, 'Batal'),
@@ -2020,6 +2323,9 @@ async function settingsView() {
          hanya setelah penyimpanan benar-benar berhasil.
      ---------------------------------------------------------------- */
   const draft = { ...s };
+  // Key QRIS baru: default AKTIF bila belum pernah disimpan.
+  if (draft.qrisPickupEnabled === undefined || draft.qrisPickupEnabled === '') draft.qrisPickupEnabled = true;
+  if (draft.qrisDeliveryEnabled === undefined || draft.qrisDeliveryEnabled === '') draft.qrisDeliveryEnabled = true;
   const dirty = new Set();
 
   const SAVED_AT_KEY = 'mykasir.settings.savedAt';
@@ -2105,6 +2411,7 @@ async function settingsView() {
       savedLabel.textContent = `Terakhir disimpan: ${fmtDateTime(savedAt)}`;
 
       await refreshSettings();
+      api.bustCache();
       updateSaveState();
       toast('Pengaturan disimpan', 'ok');
     } catch (err) {
@@ -2115,8 +2422,10 @@ async function settingsView() {
     }
   };
 
-  const switchRow = (key, label, hint) => {
-    const input = h('input', { type: 'checkbox', checked: !!draft[key] });
+  const switchRow = (key, label, hint, defaultOn = true) => {
+    // Key yang belum pernah ada di Spreadsheet dianggap aktif (nilai bawaan).
+    const initial = draft[key] === undefined || draft[key] === '' ? defaultOn : !!draft[key];
+    const input = h('input', { type: 'checkbox', checked: initial });
     input.addEventListener('change', () => {
       if (!!draft[key] === input.checked) return;
       setDraft(key, input.checked);
@@ -2126,7 +2435,7 @@ async function settingsView() {
         h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, label),
         hint ? h('div.t-xs', { style: { marginTop: '2px' } }, hint) : null
       ),
-      h('label.switch', null, input)
+      h('span.switch', null, input)
     );
   };
 
@@ -2576,6 +2885,18 @@ async function settingsView() {
             switchRow('allowNegotiable', 'Harga bisa dinegosiasikan', 'Tampilkan label “bisa nego” pada produk'),
             switchRow('allowDiscount', 'Diskon', 'Izinkan diskon pada transaksi'),
             switchRow('requireCustomerName', 'Nama pelanggan wajib diisi', 'Gagalkan checkout bila nama kosong')
+          )
+        ),
+
+        h('div.panel.mt-4', null,
+          h('div.panel__head', null, h('h3.t-h3', null, 'Pembayaran QRIS di toko online')),
+          h('div.panel__body', null,
+            h('p.t-body.mb-3', null,
+              'Matikan QRIS bila toko hanya menerima pembayaran langsung di kasir. ' +
+              'Pelanggan tidak lagi melihat pilihan QRIS untuk jenis pesanan yang dimatikan.'
+            ),
+            switchRow('qrisPickupEnabled', 'QRIS untuk ambil di tempat (pickup)', 'Tampilkan metode QRIS pada pesanan yang diambil sendiri'),
+            switchRow('qrisDeliveryEnabled', 'QRIS untuk delivery (diantar)', 'Tampilkan metode QRIS pada pesanan yang diantar')
           )
         ),
 

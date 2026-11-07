@@ -154,8 +154,8 @@ export function createPickerMap(opts = {}) {
     // customer can always tell which pin is the shop and which one to move.
     if (referencePoint && isValidLatLng(referencePoint.lat, referencePoint.lng)) {
       const shopIcon = L.divIcon({
-        className: 'mykasir-map-pin mykasir-map-pin--store',
-        html: '<span class="mykasir-map-pin__dot"></span><span class="mykasir-map-pin__label">TOKO</span>',
+        className: 'my-kasir-map-pin my-kasir-map-pin--store',
+        html: '<span class="my-kasir-map-pin__dot"></span><span class="my-kasir-map-pin__label">TOKO</span>',
         iconSize: [58, 30],
         iconAnchor: [14, 15],
       });
@@ -173,8 +173,8 @@ export function createPickerMap(opts = {}) {
 
     const destinationIcon = referencePoint
       ? L.divIcon({
-          className: 'mykasir-map-pin mykasir-map-pin--destination',
-          html: '<span class="mykasir-map-pin__dot"></span>',
+          className: 'my-kasir-map-pin my-kasir-map-pin--destination',
+          html: '<span class="my-kasir-map-pin__dot"></span>',
           iconSize: [24, 24],
           iconAnchor: [12, 12],
         })

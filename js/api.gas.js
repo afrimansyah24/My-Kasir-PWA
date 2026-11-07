@@ -258,7 +258,7 @@ function invalidateCache() {
     const action = key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
 
     // Pengaturan harus dibaca ulang dari server setelah penulisan.
-    if (action === 'getSettings') {
+    if (action === 'getSettings' || action === 'getPublicCatalogData') {
       delete store[key];
       changed = true;
       continue;

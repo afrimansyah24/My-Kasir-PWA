@@ -1263,6 +1263,27 @@
   margin-top: var(--s-3);
 }
 
+/* Status proses saat PIN diperiksa: spinner di bawah keypad. */
+.gate__busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: var(--s-4);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+/* Keypad nonaktif saat permintaan sedang berjalan. */
+.keypad.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* Titik PIN sedikit meredup selama proses. */
+.pin-display.is-busy { opacity: 0.6; }
+
 /* -------------------------------------------------------------------------
    Order tracking
    ---------------------------------------------------------------------- */
@@ -1836,3 +1857,180 @@
 }
 .hero-tile-preview .ico { width: 32px; height: 32px; color: var(--cobalt); }
 .hero-tile-preview img { width: 100%; height: 100%; object-fit: contain; }
+
+/* ==========================================================================
+   Card view — Katalog & Stok (owner) & Pengguna (owner)
+   --------------------------------------------------------------------------
+   Daftar panjang (produk, pengguna) lebih mudah dipindai sebagai kartu:
+   satu kartu = satu entitas, dengan aksi di dalam kartu itu sendiri.
+   ========================================================================== */
+
+.product-admin-grid,
+.user-admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: var(--s-3);
+}
+
+@media (max-width: 640px) {
+  .product-admin-grid,
+  .user-admin-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--s-2);
+  }
+}
+
+.product-admin-card,
+.user-admin-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--glass-dark-line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--sh-1, 0 2px 8px -2px rgba(16, 22, 43, 0.1));
+  transition: transform var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out), border-color var(--t-base) var(--ease-out);
+  animation: fade-up var(--dur-4) var(--ease-out) both;
+}
+
+.product-admin-card:hover,
+.user-admin-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--cobalt);
+  box-shadow: var(--sh-2);
+}
+
+.product-admin-card__media {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(155deg, var(--surface-2), var(--surface-sunk));
+  display: grid;
+  place-items: center;
+  padding: 10px;
+}
+
+.product-admin-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.product-admin-card__placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--ink-400);
+}
+
+.product-admin-card__media > .badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+}
+
+.product-admin-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  flex: 1;
+}
+
+.product-admin-card__title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.product-admin-card__title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.product-admin-card__desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-400);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.product-admin-card__prices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.product-admin-card__prices > div { display: flex; flex-direction: column; }
+.product-admin-card__prices b {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-800, var(--ink-700));
+}
+
+.product-admin-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2, var(--glass-dark-line));
+}
+
+/* --- kartu pengguna --------------------------------------------------- */
+.user-admin-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 0;
+}
+
+.user-admin-card__name {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.user-admin-card__username {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-400);
+  word-break: break-all;
+}
+
+.user-admin-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px 0;
+}
+
+.user-admin-card__body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+.user-admin-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2, var(--glass-dark-line));
+}

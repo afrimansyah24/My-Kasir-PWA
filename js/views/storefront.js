@@ -185,6 +185,7 @@ function catalogSignature(data) {
       st.lat, st.lng,
       f.onlineOrder, f.delivery, f.dineIn, f.customerName,
       f.requireCustomerName, f.allowNegotiable, f.allowDiscount,
+      f.qrisPickup, f.qrisDelivery,
     ].join('#');
   } catch {
     return String(Date.now());   // gagal membandingkan -> anggap berubah
@@ -265,8 +266,15 @@ function onFreshData(detail) {
   }
   if (action === 'getSettings' && value && typeof value === 'object' && value.ok !== false) {
     const nextOnline = !!value.featureOnlineOrder;
+    // Toggle QRIS ikut dipantau: menyalakan/mematikannya harus langsung
+    // mengubah pilihan pembayaran di checkout tanpa perlu refresh halaman.
+    const nextQrisPickup = value.qrisPickupEnabled === undefined ? true : !!value.qrisPickupEnabled;
+    const nextQrisDelivery = value.qrisDeliveryEnabled === undefined ? true : !!value.qrisDeliveryEnabled;
+    const cur = state.data.features || {};
     const changed =
       nextOnline !== state.onlineEnabled ||
+      nextQrisPickup !== (cur.qrisPickup !== false) ||
+      nextQrisDelivery !== (cur.qrisDelivery !== false) ||
       value.storeName !== state.data.store.name ||
       (value.storeLogo || '') !== (state.data.store.logo || '') ||
       (value.storeTagline || '') !== (state.data.store.tagline || '');
@@ -284,6 +292,8 @@ function onFreshData(detail) {
         requireCustomerName: !!value.requireCustomerName,
         allowNegotiable: !!value.allowNegotiable,
         allowDiscount: !!value.allowDiscount,
+        qrisPickup: nextQrisPickup,
+        qrisDelivery: nextQrisDelivery,
       },
     };
     // Paksa render: signature merged bisa sama bila hanya fitur berubah
@@ -868,6 +878,7 @@ function openCart() {
 
 function openCheckout() {
   const data = state.data;
+  const storeBundle = () => (state.data || data).store || {};
 
   // Toko online ditutup -> tidak boleh ada pesanan baru.
   if (!state.onlineEnabled) {
@@ -877,6 +888,17 @@ function openCheckout() {
 
   let payment = 'QRIS';
   let fulfilment = cart.cart().fulfilment === 'delivery' ? 'delivery' : 'pickup';
+
+  /**
+   * QRIS boleh dimatikan owner untuk pickup dan/atau delivery.
+   *
+   * `features` undefined = server versi lama -> QRIS dianggap aktif
+   * (perilaku sebelumnya), bukan dimatikan diam-diam.
+   */
+  const feat = data.features || {};
+  const qrisPickupAllowed = feat.qrisPickup !== false;
+  const qrisDeliveryAllowed = feat.qrisDelivery !== false;
+  const qrisAllowedFor = (kind) => (kind === 'delivery' ? qrisDeliveryAllowed : qrisPickupAllowed);
 
   modal((close) => {
     const wrap = h('div');
@@ -956,10 +978,23 @@ function openCheckout() {
       addressField.classList.toggle('hidden', fulfilment !== 'delivery');
       mapField.classList.toggle('hidden', fulfilment !== 'delivery');
       cart.setFulfilment(fulfilment);
+      // metode pembayaran ikut menyesuaikan jenis pengambilan
+      syncPay();
+      syncPayNote();
 
       // Peta & ongkir hanya relevan untuk delivery.
-      if (fulfilment === 'delivery' && !picker) {
-        mountDeliveryMap();
+      if (fulfilment === 'delivery') {
+        const st = storeBundle();
+        const hasCoords = normalizeCoordinate(st.lat, 'lat') !== null
+          && normalizeCoordinate(st.lng, 'lng') !== null;
+        const hadError = !!mapHolder.querySelector('.callout--warn');
+        if (!picker || (hadError && hasCoords)) {
+          mapHolder.innerHTML = '';
+          picker = null;
+          mountDeliveryMap();
+        }
+      } else {
+        picker = null;
       }
 
       updateTotals();
@@ -967,22 +1002,34 @@ function openCheckout() {
 
     /** Buat peta penanda lokasi tujuan (ala Gojek/Grab). */
     const mountDeliveryMap = () => {
-      const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
-      const perKm = Number(data.store.deliveryPerKm) || 0;
+      const st0 = storeBundle();
+      const radiusKm = Number(st0.deliveryRadiusKm) || 0;
+      const perKm = Number(st0.deliveryPerKm) || 0;
       // Koordinat dari server bisa berupa nilai legacy tanpa titik desimal.
       // Normalisasi dahulu; jangan pernah jatuh ke Bandung sebagai lokasi toko.
-      const storeLat = normalizeCoordinate(data.store.lat, 'lat');
-      const storeLng = normalizeCoordinate(data.store.lng, 'lng');
+      const storeLat = normalizeCoordinate(st0.lat, 'lat');
+      const storeLng = normalizeCoordinate(st0.lng, 'lng');
       if (storeLat === null || storeLng === null) {
-        toast('Lokasi toko belum diatur dengan koordinat yang valid. Silakan hubungi pemilik toko.', 'warn', 4500);
+        // Peringatan harus MENETAP di dalam modal. Sebelumnya pesan hanya
+        // muncul lewat toast (yang hilang ~4,5 detik) dan di `mapInfo` yang
+        // belum sempat di-mount -> kotak peta tampil KOSONG tanpa penjelasan.
+        // Sekarang callout--warn benar-benar menempel di area peta.
         mapInfo.textContent = 'Lokasi toko belum diatur dengan benar.';
+        mapHolder.append(
+          h('div.callout.callout--warn', null,
+            icon('alert'),
+            'Lokasi toko belum diatur dengan koordinat yang valid, jadi peta dan ongkir belum bisa ditampilkan. Silakan hubungi pemilik toko.'
+          )
+        );
+        mapHolder.append(mapInfo);
+        toast('Lokasi toko belum diatur dengan koordinat yang valid. Silakan hubungi pemilik toko.', 'warn', 4500);
         return;
       }
 
       const info = () => {
         const km = cart.destinationKm();
         if (km === null) return 'Belum ada titik yang dipilih.';
-        const fee = perKm > 0 ? rupiah(Math.ceil(perKm * km)) : rupiah(data.store.deliveryFee);
+        const fee = perKm > 0 ? rupiah(Math.ceil(perKm * km)) : rupiah(st0.deliveryFee);
         const within = radiusKm > 0 ? (km <= radiusKm ? ' (dalam radius layanan)' : ' (di luar radius layanan)') : '';
         return `Jarak ke toko ${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`} · ongkir ${fee}${within}`;
       };
@@ -991,7 +1038,7 @@ function openCheckout() {
       picker = createPickerMap({
         lat: storeLat,
         lng: storeLng,
-        referencePoint: { lat: storeLat, lng: storeLng, label: data.store.name || 'Lokasi toko' },
+        referencePoint: { lat: storeLat, lng: storeLng, label: st0.name || 'Lokasi toko' },
         zoom: 15,
         radiusKm,
         height: 300,
@@ -1089,7 +1136,12 @@ function openCheckout() {
     /* --- step 2: payment -------------------------------------------- */
     const qrisOpt = h('button.pay__opt', {
       type: 'button',
-      onclick: () => { payment = 'QRIS'; syncPay(); },
+      onclick: () => {
+        if (!qrisAllowedFor(fulfilment)) return;
+        payment = 'QRIS';
+        syncPay();
+        syncPayNote();
+      },
     },
       h('span.pay__ico', null, icon('qr')),
       h('div.grow', null,
@@ -1099,7 +1151,11 @@ function openCheckout() {
     );
     const cashOpt = h('button.pay__opt', {
       type: 'button',
-      onclick: () => { payment = 'Cash'; syncPay(); },
+      onclick: () => {
+        payment = 'Cash';
+        syncPay();
+        syncPayNote();
+      },
     },
       h('span.pay__ico', null, icon('cash')),
       h('div.grow', null,
@@ -1109,20 +1165,46 @@ function openCheckout() {
     );
 
     function syncPay() {
+      // Bila QRIS dimatikan untuk jenis pengambilan ini, pilihan Cash yang
+      // dipakai — dan tombol QRIS disembunyikan.
+      if (!qrisAllowedFor(fulfilment)) {
+        payment = 'Cash';
+        qrisOpt.classList.add('hidden');
+      } else {
+        qrisOpt.classList.remove('hidden');
+      }
       qrisOpt.classList.toggle('is-active', payment === 'QRIS');
       cashOpt.classList.toggle('is-active', payment === 'Cash');
     }
+
+    const qrisNote = h('div.callout.mt-4', null,
+      icon('info'),
+      'Pesanan QRIS berlaku 10 menit. Bila belum dibayar, pesanan otomatis dibatalkan.'
+    );
+    const cashNote = h('div.callout.mt-4', null,
+      icon('info'),
+      'Pesanan dibayar langsung di kasir saat pengambilan atau pengiriman.'
+    );
 
     const step2 = h('div', null,
       h('div.field', null,
         h('label', null, 'Metode pembayaran'),
         h('div.pay', null, qrisOpt, cashOpt)
       ),
-      h('div.callout.mt-4', null,
-        icon('info'),
-        'Pesanan QRIS berlaku 10 menit. Bila belum dibayar, pesanan otomatis dibatalkan.'
-      )
+      qrisNote,
+      cashNote
     );
+
+    /**
+     * Tampilkan catatan yang sesuai metode pembayaran aktif.
+     * Kalau QRIS dimatikan untuk jenis pengambilan ini, hanya catatan Cash
+     * yang muncul (dan tombol QRIS disembunyikan).
+     */
+    function syncPayNote() {
+      const qrisOn = payment === 'QRIS' && qrisAllowedFor(fulfilment);
+      qrisNote.classList.toggle('hidden', !qrisOn);
+      cashNote.classList.toggle('hidden', qrisOn);
+    }
 
     /* --- step 3: result ---------------------------------------------- */
     const step3 = h('div');
@@ -1134,6 +1216,7 @@ function openCheckout() {
       else if (n === 1) bodyHost.append(step2);
       else bodyHost.append(step3);
       foot.innerHTML = '';
+      if (n === 1) syncPayNote();
       renderFoot(n);
     };
 
@@ -1146,7 +1229,14 @@ function openCheckout() {
           h('button.btn.btn--primary.grow', {
             onclick: () => {
               if (fulfilment === 'delivery') {
-                const radiusKm = Number(data.store.deliveryRadiusKm) || 0;
+                const stf = storeBundle();
+                const sLat = normalizeCoordinate(stf.lat, 'lat');
+                const sLng = normalizeCoordinate(stf.lng, 'lng');
+                if (sLat === null || sLng === null) {
+                  toast('Lokasi toko belum diatur — pesanan delivery tidak dapat dilanjutkan', 'warn');
+                  return;
+                }
+                const radiusKm = Number(stf.deliveryRadiusKm) || 0;
                 const km = cart.destinationKm();
                 if (radiusKm > 0) {
                   if (km === null) {

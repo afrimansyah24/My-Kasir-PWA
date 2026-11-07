@@ -28,6 +28,9 @@ const FALLBACK = {
   featureQueue: true,
   featureOnlineOrder: true,
   featureTableNumber: false,
+  // QRIS untuk pickup & delivery di toko online (owner bisa mematikan).
+  qrisPickupEnabled: true,
+  qrisDeliveryEnabled: true,
   allowNegotiable: true,
   allowDiscount: true,
   requireCustomerName: false,
