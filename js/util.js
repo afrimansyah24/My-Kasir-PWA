@@ -475,6 +475,20 @@ export function fileToDataUrl(file, maxSize = 900) {
  * contoh -7098393 / 112188021 untuk -7.098393 / 112.188021. Angka valid
  * yang sudah berada dalam rentang bumi tidak pernah diubah.
  *
+ * Di luar itu ada data dengan skala jauh lebih besar — mis. hasil ekspor
+ * GPS yang menulis 15 digit desimal sebagai bilangan bulat:
+ * -7103954938686640 yang sebenarnya -7.10395493868664. Nilai semacam itu
+ * berada di luar rentang bumi sehingga Sheet & Leaflet menolaknya, dan
+ * karena itu ongkir tak bisa dihitung sama sekali ("Belum ada titik yang
+ * dipilih") walau peta & pin biru tampil normal.
+ *
+ * Pemulihan: bagi dengan pangkat 10 lalu ambil skala dengan magnitudo
+ * TERBESAR yang masih menghasilkan titik masuk akal. Ambang "masuk akal":
+ *   - latitude  : |lat| <= 60 derajat (di atas itu hanya es/polar, bukan toko)
+ *   - longitude : |lng| <= 180 derajat
+ * Nilai yang pulih SELALU ditampilkan di peta pengaturan agar owner bisa
+ * memeriksa dan menyimpannya ulang ke Spreadsheet.
+ *
  * @param {'lat'|'lng'|'latitude'|'longitude'} axis
  * @returns {number|null}
  */
@@ -484,9 +498,19 @@ export function normalizeCoordinate(value, axis = 'lat') {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   if (Math.abs(n) <= limit) return n;
-  if (Number.isInteger(n)) {
-    const scaled = n / 1_000_000;
-    if (Math.abs(scaled) <= limit) return scaled;
+
+  // Hanya bilangan bulat yang bisa berupa "titik desimal hilang".
+  if (!Number.isInteger(n)) return null;
+
+  // Format legacy yang sudah dikenal: 6 digit desimal hilang.
+  const legacy = n / 1000000;
+  if (Math.abs(legacy) <= limit) return legacy;
+
+  // Skala yang lebih besar (9-15 digit desimal hilang).
+  const plausible = axis === 'lng' || axis === 'longitude' ? 180 : 60;
+  for (let k = 1; k <= 15; k++) {
+    const scaled = n / Math.pow(10, k);
+    if (Math.abs(scaled) <= plausible) return scaled;
   }
   return null;
 }
@@ -631,3 +655,27 @@ export function resolveImageSrc(value) {
  * permintaan tidak ditolak browser.
  */
 export const JSONP_SAFE_MAX_CHARS = 16_000;
+
+/** Link WhatsApp (nomor Indonesia: 08xx -> 62xx). */
+export function whatsappHref(phone, text = '') {
+  const raw = String(phone || '').trim();
+  if (!raw) return '';
+  let digits = raw.replace(/[^0-9+]/g, '').replace(/^\+/, '');
+  if (digits.startsWith('0')) digits = '62' + digits.slice(1);
+  if (!digits) return '';
+  const base = 'https://wa.me/' + digits;
+  if (!text) return base;
+  return base + '?text=' + encodeURIComponent(text);
+}
+
+/** Buka lokasi di Google Maps (koordinat lebih dulu, lalu alamat). */
+export function mapsHref(lat, lng, address = '') {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (Number.isFinite(la) && Number.isFinite(ln)) {
+    return 'https://www.google.com/maps?q=' + la + ',' + ln;
+  }
+  const addr = String(address || '').trim();
+  if (addr) return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr);
+  return '';
+}

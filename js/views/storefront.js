@@ -8,6 +8,7 @@ import {
   $, h, icon, iconSvg, toast, rupiah, esc, debounce, fmtDate, fmtTime,
   fmtDateTime, relTime, uid, orderCode, modal, closeModal, copyText, emptyState,
   compressForStorage, resolveImageSrc, normalizeCoordinate,
+  whatsappHref, mapsHref,
 } from '../util.js';
 import * as api from '../api.js';
 import * as cart from '../cart.js';
@@ -15,7 +16,7 @@ import { qrCanvas } from '../qr.js';
 import { areaChart, donutChart, legend, sparkline } from '../charts.js';
 import { go, withBase } from '../app.js';
 import { createPickerMap } from '../map.js';
-import { refreshSettings } from '../settings.js';
+import { refreshSettings, settings } from '../settings.js';
 
 let state = {
   data: null,
@@ -149,6 +150,36 @@ function applyOnlineGate(data) {
     cart.clearCart();
   }
   document.documentElement.dataset.storeOnline = state.onlineEnabled ? '1' : '0';
+}
+
+/**
+ * Lokasi toko dari katalog publik.
+ *
+ * Backend lama bisa mengembalikan `lat: null` bila nilai di Spreadsheet
+ * tersimpan dengan titik desimal hilang (mis. -7103954938686640 yang
+ * sebenarnya -7.10395493868664). Koordinat seperti itu tidak bisa dipakai
+ * untuk ongkir maupun peta.
+ *
+ * Karena itu: kalau katalog tidak punya koordinat usable, ambil dari cache
+ * pengaturan (`storeLat`/`storeLng`) yang juga dinormalisasi. Fallback ini
+ * hanya dipakai bila katalog memang kosong — tidak pernah mengarang titik.
+ */
+function storeCoords() {
+  const st = (state.data && state.data.store) || {};
+  const fromCatalog = {
+    lat: normalizeCoordinate(st.lat, 'lat'),
+    lng: normalizeCoordinate(st.lng, 'lng'),
+  };
+  if (fromCatalog.lat !== null && fromCatalog.lng !== null) return fromCatalog;
+
+  const s = settings();
+  const fromSettings = {
+    lat: normalizeCoordinate(s.storeLat, 'lat'),
+    lng: normalizeCoordinate(s.storeLng, 'lng'),
+  };
+  if (fromSettings.lat !== null && fromSettings.lng !== null) return fromSettings;
+
+  return fromCatalog;
 }
 
 /** Referensi data yang terakhir dirender — mencegah render ganda. */
@@ -1028,10 +1059,14 @@ function openCheckout() {
       const st0 = storeBundle();
       const radiusKm = Number(st0.deliveryRadiusKm) || 0;
       const perKm = Number(st0.deliveryPerKm) || 0;
-      // Koordinat dari server bisa berupa nilai legacy tanpa titik desimal.
-      // Normalisasi dahulu; jangan pernah jatuh ke Bandung sebagai lokasi toko.
-      const storeLat = normalizeCoordinate(st0.lat, 'lat');
-      const storeLng = normalizeCoordinate(st0.lng, 'lng');
+      // Koordinat toko dari katalog publik ATAU cache pengaturan.
+      //
+      // Katalog publik dibaca server dari kolom yang sama dengan pengaturan,
+      // tapi server bisa mengembalikan null bila titik desimalnya hilang di
+      // Spreadsheet. Cache pengaturan dinormalisasi di sisi peramban, jadi
+      // di sini cukup memakai satu helper agar peta dan ongkir memakai
+      // titik yang SAMA. Jangan pernah jatuh ke Bandung sebagai lokasi toko.
+      const { lat: storeLat, lng: storeLng } = storeCoords();
       if (storeLat === null || storeLng === null) {
         // Peringatan harus MENETAP di dalam modal. Sebelumnya pesan hanya
         // muncul lewat toast (yang hilang ~4,5 detik) dan di `mapInfo` yang
@@ -1234,8 +1269,9 @@ function openCheckout() {
     },
       h('span.pay__ico', null, icon('cash')),
       h('div.grow', null,
-        h('b', null, 'Cash'),
-        h('span', null, 'Bayar di kasir saat pengambilan / pengiriman')
+        // Untuk delivery, Cash = COD: dibayar di lokasi pengantaran.
+        h('b', null, 'Cash (COD)'),
+        h('span', null, 'Bayar di kasir saat pengambilan / di lokasi saat diantar')
       )
     );
 
@@ -1260,6 +1296,13 @@ function openCheckout() {
       icon('info'),
       'Pesanan dibayar langsung di kasir saat pengambilan atau pengiriman.'
     );
+    // COD: untuk delivery, uang ditagih kurir di tempat tujuan.
+    const codNote = h('div.callout.mt-4', null,
+      icon('cash'),
+      'Pesanan COD: kurir menagih uang di tempat saat barang sampai. ',
+      h('b', null, 'Tidak ada konfirmasi pembayaran di awal.'),
+      ' Pembayaran dicatat setelah kurir menandai pesanan selesai.'
+    );
 
     const step2 = h('div', null,
       h('div.field', null,
@@ -1267,7 +1310,8 @@ function openCheckout() {
         h('div.pay', null, qrisOpt, cashOpt)
       ),
       qrisNote,
-      cashNote
+      cashNote,
+      codNote
     );
 
     /**
@@ -1277,8 +1321,10 @@ function openCheckout() {
      */
     function syncPayNote() {
       const qrisOn = payment === 'QRIS' && qrisAllowedFor(fulfilment);
+      const codOn = payment === 'Cash' && fulfilment === 'delivery';
       qrisNote.classList.toggle('hidden', !qrisOn);
-      cashNote.classList.toggle('hidden', qrisOn);
+      cashNote.classList.toggle('hidden', qrisOn || codOn);
+      codNote.classList.toggle('hidden', !codOn);
     }
 
     /* --- step 3: result ---------------------------------------------- */
@@ -1477,16 +1523,24 @@ function openCheckout() {
           )
         );
       } else {
+        // Cash: pickup dibayar di kasir, delivery = COD (dibayar di lokasi).
+        const cod = fulfilment === 'delivery';
         step3.append(
           h('div.t-center', null,
             h('div.badge.badge--ok.mt-2', null, icon('checkCircle'), 'Pesanan dibuat'),
             h('div.qris__amount.mt-3', null, rupiah(order.total)),
             h('div.t-sm', null, order.code)
           ),
-          h('div.callout.callout--ok.mt-5', null,
-            icon('cash'),
-            'Pesanan menunggu pembayaran di kasir. Tunjukkan kode ', h('b', null, order.code), ' kepada kasir.'
-          )
+          cod
+            ? h('div.callout.callout--ok.mt-5', null,
+              icon('cash'),
+              'Pesanan COD. Siapkan uang ', h('b', null, rupiah(order.total)),
+              ' — kurir akan menagih saat barang sampai di alamat Anda.'
+            )
+            : h('div.callout.callout--ok.mt-5', null,
+              icon('cash'),
+              'Pesanan menunggu pembayaran di kasir. Tunjukkan kode ', h('b', null, order.code), ' kepada kasir.'
+            )
         );
       }
     }
@@ -1595,14 +1649,28 @@ const STATUS_FLOW = [
   { key: 'paid', label: 'Pembayaran diterima', icon: 'wallet' },
   { key: 'preparing', label: 'Pesanan diproses', icon: 'box' },
   { key: 'delivering', label: 'Sedang diantar kurir', icon: 'truck' },
-  { key: 'ready', label: 'Selesai / siap diambil', icon: 'checkCircle' },
+  { key: 'delivered', label: 'Selesai diantar', icon: 'checkCircle' },
+];
+
+/**
+ * Alur COD: pembayaran terjadi di lokasi, jadi tahap "pembayaran diterima"
+ * tidak ada. Yang ditampilkan: diproses -> diantar -> selesai.
+ */
+const STATUS_FLOW_COD = [
+  { key: 'preparing', label: 'Pesanan diproses', icon: 'box' },
+  { key: 'delivering', label: 'Sedang diantar kurir', icon: 'truck' },
+  { key: 'delivered', label: 'Selesai — bayar di tempat', icon: 'cash' },
 ];
 
 function orderStatus(order) {
-  // Kiripickup tidak melewati tahap "diantar" — alurnya jadi 4 langkah saja.
-  const flow = order.fulfilment === 'delivery'
-    ? STATUS_FLOW
-    : STATUS_FLOW.filter((s) => s.key !== 'delivering');
+  // Kurir pickup tidak melewati tahap "diantar" — alurnya jadi 4 langkah saja.
+  // COD delivery juga tanpa tahap "pembayaran diterima".
+  const isCodOrder = order.payment === 'Cash' && order.fulfilment === 'delivery';
+  const flow = isCodOrder
+    ? STATUS_FLOW_COD
+    : order.fulfilment === 'delivery'
+      ? STATUS_FLOW
+      : STATUS_FLOW.filter((s) => s.key !== 'delivering' && s.key !== 'delivered');
 
   const idx = flow.findIndex((s) => s.key === order.status);
   const cancelled = order.status === 'cancelled';
@@ -1626,11 +1694,17 @@ function orderStatus(order) {
     );
   });
 
+  // COD (delivery + Cash): belum lunas sampai pesanan selesai diantar.
+  const cod = order.payment === 'Cash' && order.fulfilment === 'delivery';
+  const unpaid = cod && order.paymentStatus !== 'paid';
+
   const statusLabel = cancelled ? 'Kedaluwarsa'
     : order.status === 'delivering' ? 'Diantar'
-      : order.status === 'ready' ? 'Selesai'
-        : order.status === 'pending' ? 'Menunggu bayar'
-          : 'Diproses';
+      : order.status === 'delivered' ? 'Selesai'
+        : order.status === 'ready' ? 'Siap diambil'
+          : order.status === 'pending' ? 'Menunggu bayar'
+            : unpaid ? 'Menunggu pembayaran di tempat'
+              : 'Diproses';
 
   return h('div', null,
     h('div.panel', null,
@@ -1639,7 +1713,7 @@ function orderStatus(order) {
           h('div.t-h3', null, `Pesanan ${order.code}`),
           h('div.t-sm', null, fmtDateTime(order.ts))
         ),
-        h('span', { class: `badge ${cancelled ? 'badge--err' : order.status === 'ready' || order.status === 'delivering' ? 'badge--ok' : order.status === 'pending' ? 'badge--warn' : 'badge--info'}` },
+        h('span', { class: `badge ${cancelled ? 'badge--err' : order.status === 'ready' || order.status === 'delivering' || order.status === 'delivered' ? 'badge--ok' : order.status === 'pending' ? 'badge--warn' : 'badge--info'}` },
           statusLabel)
       ),
       h('div.panel__body', null,
@@ -1648,12 +1722,19 @@ function orderStatus(order) {
           : steps,
         order.status === 'pending'
           ? h('div.callout.callout--warn.mt-4', null, icon('clock'), 'Selesaikan pembayaran QRIS Anda agar pesanan diproses.')
+          : null,
+        unpaid
+          ? h('div.callout.callout--warn.mt-4', null,
+            icon('cash'),
+            'Pesanan dibayar di tempat (COD). Siapkan uang ', h('b', null, rupiah(order.total)),
+            ' — kurir menagih saat barang sampai.'
+          )
           : null
       )
     ),
 
     // Kartu kurir: tampil setelah kurir ditugaskan — pelanggan bisa langsung
-    // menelepon kurirnya.
+    // menghubungi kurirnya lewat WhatsApp.
     order.courier
       ? h('div.panel.mt-4', null,
         h('div.panel__head', null, h('h3.t-h3', null, 'Kurir pengantaran')),
@@ -1663,13 +1744,26 @@ function orderStatus(order) {
             h('div.grow', null,
               h('div', { style: { fontWeight: '700', fontSize: '14.5px' } }, order.courier),
               order.courierPhone
-                ? h('div.t-sm', null, order.courierPhone)
+                ? h('a.t-sm', {
+                  href: whatsappHref(
+                    order.courierPhone,
+                    `Halo, saya pelanggan pesanan ${order.code}.`
+                  ),
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                  style: { color: 'var(--cobalt)', fontWeight: '600' },
+                }, order.courierPhone)
                 : h('div.t-xs', { style: { opacity: '0.7' } }, 'Tanpa nomor telepon')
             ),
             order.courierPhone
               ? h('a.btn.btn--primary.btn--sm', {
-                href: `tel:${String(order.courierPhone).replace(/[^0-9+]/g, '')}`,
-              }, icon('phone'), 'Telepon kurir')
+                href: whatsappHref(
+                  order.courierPhone,
+                  `Halo, saya pelanggan pesanan ${order.code}.`
+                ),
+                target: '_blank',
+                rel: 'noopener noreferrer',
+              }, icon('phone'), 'Chat kurir')
               : null
           )
         )

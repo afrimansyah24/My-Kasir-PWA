@@ -11,7 +11,7 @@ import {
   fmtDateTime, relTime, initials, modal, confirmDialog, emptyState, copyText,
   fileToDataUrl, numberShort, compressForStorage, haversineKm,
   driveFileId, resolveImageSrc, JSONP_SAFE_MAX_CHARS, normalizeCoordinate,
-  ICON_NAMES,
+  whatsappHref, mapsHref, ICON_NAMES,
 } from '../util.js';
 import * as api from '../api.js';
 import { settings, refreshSettings } from '../settings.js';
@@ -22,6 +22,7 @@ import { createPickerMap } from '../map.js';
 import { qrCanvas } from '../qr.js';
 import { GAS_URL, readOverride, writeOverride } from '../config.js';
 import { mountQueueScreen } from './queue.js';
+import { courierView } from './courier.js';
 
 /**
  * Sesi portal HANYA hidup di memori tab.
@@ -32,7 +33,10 @@ import { mountQueueScreen } from './queue.js';
  *
  * Menutup/memuat ulang tab otomatis mengakhiri sesi.
  */
-let session = null; // { role, name, username, id }
+let session = null; // { role, name, username, id, phone }
+
+/** Nama peran untuk ditampilkan (bukan id internal). */
+const ROLE_LABEL_ = { owner: 'Owner', kasir: 'Kasir', kurir: 'Kurir' };
 
 export function getSession() {
   return session;
@@ -264,7 +268,8 @@ function loginGate() {
       h('p.t-body.mt-2', null, 'Pilih peran untuk membuka menu yang sesuai.'),
       h('div.pay.mt-5', null,
         roleCard('owner', 'Owner', 'Akses penuh: katalog, laporan, pengguna, pengaturan', 'user'),
-        roleCard('kasir', 'Kasir', 'Kelola transaksi, pesanan, dan antrean saja', 'cash')
+        roleCard('kasir', 'Kasir', 'Kelola transaksi, pesanan, dan antrean saja', 'cash'),
+        roleCard('kurir', 'Kurir', 'Ambil dan antarkan pesanan yang ditugaskan', 'truck')
       ),
       h('button.btn.btn--ghost.btn--sm.grow.mt-4', {
         onclick: () => { step = 'pin'; pin = ''; paint(); },
@@ -304,10 +309,10 @@ function loginGate() {
       }
       const user = res.user || {};
       if (user.role !== role) {
-        error.textContent = `Akun ini bukan akun ${role === 'owner' ? 'owner' : 'kasir'}.`;
+        error.textContent = `Akun ini bukan akun ${ROLE_LABEL_[role] || role}.`;
         return;
       }
-      session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id };
+      session = { role: user.role, name: user.name || user.username, username: user.username, id: user.id, phone: user.phone || '' };
       const app = document.getElementById('app');
       app.innerHTML = '';
       app.append(portalShell(''));
@@ -320,8 +325,8 @@ function loginGate() {
     setTimeout(() => userInput.focus(), 30);
 
     return h('div', null,
-      h('div.gate__logo', null, icon(role === 'owner' ? 'user' : 'cash')),
-      h('h1.t-h1', null, role === 'owner' ? 'Login Owner' : 'Login Kasir'),
+      h('div.gate__logo', null, icon(role === 'owner' ? 'user' : role === 'kurir' ? 'truck' : 'cash')),
+      h('h1.t-h1', null, `Login ${ROLE_LABEL_[role] || role}`),
       h('p.t-body.mt-2', null, 'Masukkan username dan kata sandi akun Anda.'),
       h('div.mt-5', null,
         h('div.field', null, h('label', null, 'Username'), userInput),
@@ -351,6 +356,7 @@ function loginGate() {
 
 const NAV = [
   { key: 'pos', label: 'Kasir / POS', icon: 'cash', roles: ['kasir'] },
+  { key: 'courier', label: 'Tugas Antar', icon: 'truck', roles: ['kurir'] },
   { key: 'transactions', label: 'Transaksi', icon: 'receipt', roles: ['owner', 'kasir'] },
   { key: 'orders', label: 'Pesanan Online', icon: 'fileText', roles: ['owner', 'kasir'] },
   { key: 'queue', label: 'Antrean', icon: 'list', roles: ['owner', 'kasir'] },
@@ -362,7 +368,7 @@ const NAV = [
 ];
 
 /** Menu default untuk tiap peran (kasir langsung ke POS). */
-const DEFAULT_VIEW = { owner: 'dashboard', kasir: 'pos' };
+const DEFAULT_VIEW = { owner: 'dashboard', kasir: 'pos', kurir: 'courier' };
 
 function portalShell(active = '') {
   const shell = h('div.portal');
@@ -1087,12 +1093,30 @@ async function ordersView() {
   const orders = await api.getOnlineOrders();
   const settingsNow = await api.getSettings();
 
+  // Daftar kurir untuk dipilih kasir.
+  //
+  // Sumber utama: AKUN kurir (tabel Users) — supaya pesanan yang dipilih
+  // benar-benar muncul di portal kurir itu. Daftar lama di Pengaturan →
+  // Kurir tetap dipakai sebagai cadangan untuk kurir tanpa akun.
   let couriers = [];
   try {
     const raw = settingsNow?.couriers;
     couriers = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
     if (!Array.isArray(couriers)) couriers = [];
   } catch { couriers = []; }
+
+  let courierAccounts = [];
+  try {
+    const users = await api.getUsers();
+    courierAccounts = (Array.isArray(users) ? users : [])
+      .filter((u) => u && u.role === 'kurir' && u.active !== false)
+      .map((u) => ({
+        id: u.id,
+        name: u.name || u.username,
+        phone: u.phone || '',
+        username: u.username,
+      }));
+  } catch { courierAccounts = []; }
 
   const tabs = [
     { key: 'all', label: 'Semua' },
@@ -1101,6 +1125,7 @@ async function ordersView() {
     { key: 'preparing', label: 'Diproses' },
     { key: 'ready', label: 'Siap' },
     { key: 'delivering', label: 'Diantar' },
+    { key: 'delivered', label: 'Selesai' },
     { key: 'cancelled', label: 'Batal' },
   ];
   let tab = 'all';
@@ -1113,6 +1138,7 @@ async function ordersView() {
     if (o.status === 'paid') return h('span.badge.badge--info', null, 'Terbayar');
     if (o.status === 'preparing') return h('span.badge.badge--violet', null, 'Diproses');
     if (o.status === 'delivering') return h('span.badge.badge--info', null, 'Diantar');
+    if (o.status === 'delivered') return h('span.badge.badge--ok', null, 'Selesai');
     return h('span.badge.badge--ok', null, 'Siap');
   };
 
@@ -1142,6 +1168,8 @@ async function ordersView() {
     modal((close) => {
       const nameInput = h('input.input', { type: 'text', placeholder: 'Nama kurir' });
       const phoneInput = h('input.input', { type: 'tel', placeholder: 'Nomor telepon kurir' });
+      // Id akun kurir terpilih — pesanan ini akan muncul di portal kurir itu.
+      let pickedId = '';
 
       const submit = async () => {
         const name = nameInput.value.trim();
@@ -1150,37 +1178,68 @@ async function ordersView() {
           toast('Nama kurir wajib diisi', 'warn');
           return;
         }
-        const res = await api.setOrderStatus(o.code, 'delivering', { courier: name, courierPhone: phone });
+        // Penugasan TIDAK mengubah status — kurir yang menekan "Mulai
+        // antar" nanti. Jadi status pesanan tetap "siap" sampai kurir
+        // benar-benar mengambil barangnya.
+        const res = await api.assignCourier(o.code, name, phone, pickedId);
         if (!res || res.ok === false) {
-          toast(res?.error || 'Gagal mengubah status', 'err');
+          toast(res?.error || 'Gagal menugaskan kurir', 'err');
           return;
         }
-        toast('Kurir ditugaskan', 'ok');
+        toast(`Pesanan ditugaskan ke ${name}`, 'ok');
         close();
         refresh();
       };
 
-      const preset = couriers.length
-        ? h('div.col.gap-2.mb-4', null,
-          h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih dari daftar kurir'),
-          couriers.map((c) =>
-            h('button.pick__opt', {
-              type: 'button',
-              onclick: () => {
-                nameInput.value = c.name || '';
-                phoneInput.value = c.phone || '';
-              },
-            },
-              icon('truck'),
-              h('b', null, c.name),
-              h('span', null, c.phone || 'Tanpa nomor')
-            )
-          )
-        )
-        : h('div.callout.callout--warn.mb-4', null,
-          icon('info'),
-          'Belum ada daftar kurir. Owner bisa menambahkannya di Pengaturan → Kurir. Isi manual bila perlu.'
+      const accountRow = (c) =>
+        h('button.pick__opt', {
+          type: 'button',
+          onclick: () => {
+            pickedId = c.id || '';
+            nameInput.value = c.name || '';
+            phoneInput.value = c.phone || '';
+          },
+        },
+          icon('truck'),
+          h('b', null, c.name),
+          h('span', null, c.phone || 'Tanpa nomor')
         );
+
+      const legacyRow = (c) =>
+        h('button.pick__opt', {
+          type: 'button',
+          onclick: () => {
+            pickedId = '';
+            nameInput.value = c.name || '';
+            phoneInput.value = c.phone || '';
+          },
+        },
+          icon('truck'),
+          h('b', null, c.name),
+          h('span', null, c.phone || 'Tanpa nomor')
+        );
+
+      let preset;
+      if (courierAccounts.length) {
+        preset = h('div.col.gap-2.mb-4', null,
+          h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih akun kurir'),
+          courierAccounts.map(accountRow),
+          couriers.length
+            ? h('div.t-xs', { style: { fontWeight: '600', marginTop: '10px' } }, 'Kurir tanpa akun')
+            : null,
+          couriers.map(legacyRow)
+        );
+      } else if (couriers.length) {
+        preset = h('div.col.gap-2.mb-4', null,
+          h('div.t-xs', { style: { fontWeight: '600' } }, 'Pilih dari daftar kurir'),
+          couriers.map(legacyRow)
+        );
+      } else {
+        preset = h('div.callout.callout--warn.mb-4', null,
+          icon('info'),
+          'Belum ada akun kurir. Owner bisa menambahkannya di Pengguna. Isi manual bila perlu.'
+        );
+      }
 
       return h('div', null,
         h('div.modal__head', null,
@@ -1254,7 +1313,7 @@ async function ordersView() {
                     onclick: () => pickCourier(o),
                   }, icon('truck'), 'Tugaskan kurir') : null,
                   o.status === 'delivering' ? h('button.btn.btn--sm.btn--ghost', {
-                    onclick: async () => { await api.setOrderStatus(o.code, 'ready'); refresh(); },
+                    onclick: async () => { await api.setOrderStatus(o.code, 'delivered'); refresh(); },
                   }, 'Selesai diantar') : null
                 )
               )
@@ -2174,7 +2233,7 @@ async function usersView() {
     listHost.innerHTML = '';
 
     if (!users.length) {
-      listHost.append(emptyState('users', 'Belum ada pengguna', 'Tambahkan akun kasir atau owner untuk mulai.'));
+      listHost.append(emptyState('users', 'Belum ada pengguna', 'Tambahkan akun kasir, kurir, atau owner untuk mulai.'));
       return;
     }
 
@@ -2183,19 +2242,25 @@ async function usersView() {
         users.map((u) =>
           h('article.user-admin-card', null,
             h('div.user-admin-card__head', null,
-              h('div.avatar.avatar--lg', { class: u.role === 'owner' ? 'avatar--violet' : 'avatar--teal' }, initials(u.name)),
+              h('div.avatar.avatar--lg', { class: u.role === 'owner' ? 'avatar--violet' : u.role === 'kurir' ? 'avatar--amber' : 'avatar--teal' }, initials(u.name)),
               h('div.grow', null,
                 h('div.user-admin-card__name', null, u.name),
                 h('div.user-admin-card__username', null, u.username)
               )
             ),
             h('div.user-admin-card__badges', null,
-              h('span', { class: `badge ${u.role === 'owner' ? 'badge--violet' : 'badge--info'}` },
-                u.role === 'owner' ? 'Owner' : 'Kasir'),
+              h('span', { class: `badge ${u.role === 'owner' ? 'badge--violet' : u.role === 'kurir' ? 'badge--ok' : 'badge--info'}` },
+                ROLE_LABEL_[u.role] || 'Kasir'),
               u.active
                 ? h('span.badge.badge--ok', null, 'Aktif')
                 : h('span.badge', null, 'Nonaktif')
             ),
+            u.phone
+              ? h('a.user-admin-card__phone', {
+                href: whatsappHref(u.phone),
+                target: '_blank', rel: 'noopener noreferrer',
+              }, icon('phone'), u.phone)
+              : null,
             h('div.user-admin-card__body', null,
               h('div.user-admin-card__actions', null,
                 h('button.btn.btn--sm.btn--soft.grow', {
@@ -2234,17 +2299,32 @@ async function usersView() {
 
   const openForm = (existing) => {
     const isNew = !existing;
-    const draft = existing ? { ...existing } : { name: '', username: '', password: '', role: 'kasir', active: true };
+    const draft = existing ? { ...existing } : { name: '', username: '', password: '', role: 'kasir', phone: '', active: true };
 
     modal((close) => {
       const nameInput = h('input.input', { type: 'text', value: draft.name, placeholder: 'Nama lengkap' });
       const userInput = h('input.input', { type: 'text', value: draft.username, placeholder: 'Username', autocapitalize: 'none' });
       const passInput = h('input.input', { type: 'text', value: draft.password, placeholder: 'Kata sandi' });
+      const phoneInput = h('input.input', { type: 'tel', value: draft.phone || '', placeholder: 'Nomor WhatsApp (mis. 0812-3456-7890)' });
       const roleSelect = h('select.select', null,
         h('option', { value: 'kasir', selected: draft.role === 'kasir' }, 'Kasir'),
+        h('option', { value: 'kurir', selected: draft.role === 'kurir' }, 'Kurir'),
         h('option', { value: 'owner', selected: draft.role === 'owner' }, 'Owner')
       );
       const activeSwitch = h('input', { type: 'checkbox', checked: draft.active });
+
+      // Field telepon hanya relevan untuk kurir — nomor ini dipakai
+      // pelanggan untuk menghubungi kurirnya.
+      const phoneField = h('div.field.mt-3', null,
+        h('label', null, 'Nomor WhatsApp'),
+        phoneInput,
+        h('div.field__hint', null, 'Dipakai pelanggan untuk menghubungi kurir. Kosongkan bila tidak ada.')
+      );
+      const syncPhoneField = () => {
+        phoneField.classList.toggle('hidden', roleSelect.value !== 'kurir');
+      };
+      roleSelect.addEventListener('change', syncPhoneField);
+      syncPhoneField();
 
       return h('div', null,
         h('div.modal__head', null,
@@ -2263,6 +2343,7 @@ async function usersView() {
             h('div.field__hint', null, 'Owner dapat mengubah kata sandi pengguna ini kapan saja lewat tombol "Ubah".')
           ),
           h('div.field.mt-3', null, h('label', null, 'Peran'), roleSelect),
+          phoneField,
           h('label.switch-row.mt-4', null,
             h('span.switch', null, activeSwitch),
             h('span.switch-row__text', null, 'Akun aktif'))
@@ -2281,6 +2362,8 @@ async function usersView() {
               await api.saveUserRecord({
                 ...draft, name, username, password,
                 role: roleSelect.value,
+                // Nomor hanya relevan untuk kurir.
+                phone: roleSelect.value === 'kurir' ? phoneInput.value.trim() : '',
                 active: activeSwitch.checked,
               });
               toast(isNew ? 'Pengguna ditambahkan' : 'Pengguna diperbarui', 'ok');
@@ -2297,7 +2380,7 @@ async function usersView() {
 
   return h('div', null,
     h('div.toolbar', null,
-      h('div.grow', null, h('div.t-sm', null, 'Kelola akses kasir dan owner ke portal internal.')),
+      h('div.grow', null, h('div.t-sm', null, 'Kelola akses kasir, kurir, dan owner ke portal internal.')),
       h('button.btn.btn--primary', { onclick: () => openForm(null) }, icon('plus'), 'Tambah pengguna')
     ),
     listHost
@@ -3668,6 +3751,7 @@ async function settingsView() {
 
 const viewFactory = {
   dashboard: dashboardView,
+  courier: () => courierView(session),
   pos: posView,
   orders: ordersView,
   queue: queueView,

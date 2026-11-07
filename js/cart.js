@@ -132,7 +132,6 @@ export function destinationKm() {
   const km = haversineKm(lat, lng, state.destLat, state.destLng);
   return Number.isFinite(km) ? km : null;
 }
-
 export function setDiscount(value) {
   state.discount = Math.max(0, Number(value) || 0);
   emit();

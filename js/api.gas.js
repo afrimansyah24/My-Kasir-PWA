@@ -210,7 +210,7 @@ const WRITE_ACTIONS = new Set([
   'saveCategoryRecord', 'deleteCategoryRecord',
   'saveUserRecord', 'deleteUserRecord',
   'saveSettings', 'deleteTransactionRecord',
-  'setOrderStatus', 'setQueueEntryStatus', 'adjustStockRecord',
+  'setOrderStatus', 'assignCourier', 'setQueueEntryStatus', 'adjustStockRecord',
   'saveTransaction', 'createOnlineOrder', 'payOrder',
   'setupDatabase', 'resetDemoData', 'importDatabase',
 ]);
@@ -811,6 +811,14 @@ export async function saveSettings(patch) {
 
 export async function deleteTransactionRecord(id) {
   return safe('deleteTransactionRecord', { id });
+}
+
+export async function assignCourier(code, courier, courierPhone, courierId) {
+  return safe('assignCourier', { code, courier, courierPhone, courierId });
+}
+
+export async function getCourierOrders(courierId) {
+  return safe('getCourierOrders', { courierId });
 }
 
 export async function setOrderStatus(code, status, extra = {}) {
